@@ -1,0 +1,46 @@
+const mongoose = require("mongoose");
+
+const GradeSchema = new mongoose.Schema(
+  {
+    student: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    subject: { type: String, required: true },
+    term: { type: String, required: true, default: "Term 2 · 2026" },
+    teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // ── What the teacher actually enters — each an ACTUAL score out of 100 ──
+    test: { type: Number, min: 0, max: 100, default: 0 },
+    examScore: { type: Number, min: 0, max: 100, default: 0 },
+
+    // ── Auto-computed from test/examScore on every save — never set this
+    // directly. Kept as its own field (rather than computed only on read)
+    // because the report card, class averages, and analytics all read it
+    // straight off the stored document. Shown on the grades table as "Min". ──
+    total: { type: Number, default: 0 }, // (test + examScore) / 2, rounded, out of 100
+
+    grade: { type: String, default: "" },
+    position: { type: String, default: "" },
+    remark: { type: String, default: "" },
+  },
+  { timestamps: true },
+);
+
+GradeSchema.index({ student: 1, term: 1 });
+GradeSchema.index({ subject: 1 });
+
+GradeSchema.pre("save", function (next) {
+  // Test and Exam are both entered as the actual score out of 100. Total
+  // (shown on the grades table as "Min") is their plain average — no more
+  // 40/60 weighting. e.g. Test=60, Exam=89 -> Total = (60+89)/2 = 74.5 -> 75
+  this.total = Math.round(((this.test || 0) + (this.examScore || 0)) / 2);
+
+  const v = this.total;
+  this.grade =
+    v >= 80 ? "A" : v >= 70 ? "B" : v >= 60 ? "C" : v >= 50 ? "D" : "F";
+  next();
+});
+
+module.exports = mongoose.model("Grade", GradeSchema);
