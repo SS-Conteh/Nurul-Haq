@@ -5,7 +5,6 @@ const SettingsSchema = new mongoose.Schema(
     schoolName: { type: String, default: "Nurul-Haq Islamic Academy" },
     address: { type: String, default: "Angola Town, New Jersey" },
     phone: { type: String, default: "+23279481354 / +23278221886" },
-    email: { type: String, default: "info@nurulhaqacademy.edu" },
     motto: { type: String, default: "Knowledge and Perseverance" },
     logoUrl: { type: String, default: "/assets/logo.jpeg" },
     academicYear: { type: String, default: "2025/2026" },
@@ -20,9 +19,7 @@ const SettingsSchema = new mongoose.Schema(
     afternoonShiftStart: { type: String, default: "13:00" },
     preferences: {
       smsNotifications: { type: Boolean, default: true },
-      emailAlerts: { type: Boolean, default: true },
       autoCalculateGrades: { type: Boolean, default: true },
-      parentPortalAccess: { type: Boolean, default: true },
       darkModeDefault: { type: Boolean, default: true },
       maintenanceMode: { type: Boolean, default: false },
     },

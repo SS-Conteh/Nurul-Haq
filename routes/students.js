@@ -176,8 +176,6 @@ router.post(
     try {
       const {
         name,
-        // Students never have an email — even if one is submitted by the
-        // form, it's intentionally never destructured/stored here.
         password,
         classId,
         gender,
@@ -246,7 +244,6 @@ router.put(
     try {
       const body = { ...req.body };
       if (!body.classId) delete body.classId;
-      delete body.email; // students never have an email, even on edit
       if (req.user.role === "juniorAdmin" && body.classId) {
         const SchoolClass = require("../models/SchoolClass");
         const cls = await SchoolClass.findById(body.classId);

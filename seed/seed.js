@@ -58,7 +58,6 @@ async function run() {
   console.log("Creating principal account...");
   const principal = await User.create({
     name: "Santos Simon Conteh",
-    email: "contehsantos1@hotmail.com",
     password: "Santos0039",
     role: "principal",
     phone: "033230039",
@@ -72,7 +71,7 @@ async function run() {
 
   console.log("\n✅ System is empty and ready.\n");
   console.log("Principal login:");
-  console.log(`  Email    : ${principal.email}`);
+  console.log(`  Phone    : ${principal.phone}`);
   console.log(`  Password : password123`);
   console.log(
     "\nEverything else — classes, teachers, students, notices, etc. —",

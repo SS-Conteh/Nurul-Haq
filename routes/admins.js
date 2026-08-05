@@ -42,7 +42,6 @@ router.post("/", protect, authorize("principal"), async (req, res) => {
   try {
     const {
       name,
-      email,
       password,
       role,
       phone,
@@ -61,7 +60,6 @@ router.post("/", protect, authorize("principal"), async (req, res) => {
       .toUpperCase();
     const admin = await User.create({
       name,
-      email, // optional
       password: password || "admin123",
       role: adminRole,
       phone,

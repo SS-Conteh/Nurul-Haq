@@ -4,20 +4,6 @@ const bcrypt = require("bcryptjs");
 const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
-    // Students never have an email at all (see routes/students.js, which
-    // strips it out of every request body before it reaches here). Staff
-    // (teachers/admins/principal) may optionally have one — it's never
-    // required for sign-up or for the Principal/Admin adding someone.
-    // `sparse: true` lets any number of accounts have no email at all
-    // while still enforcing uniqueness for the ones that do.
-    email: {
-      type: String,
-      required: false,
-      unique: true,
-      sparse: true,
-      lowercase: true,
-      trim: true,
-    },
     password: { type: String, required: true, minlength: 6, select: false },
     role: {
       type: String,
@@ -25,7 +11,7 @@ const UserSchema = new mongoose.Schema(
       // across every level of the school). "juniorAdmin" = Junior School
       // Admin (same kind of full CRUD access, but scoped to Nursery,
       // Primary, and JSS only — never SSS).
-      enum: ["principal", "admin", "juniorAdmin", "teacher", "student", "parent"],
+      enum: ["principal", "admin", "juniorAdmin", "teacher", "student"],
       required: true,
     },
     phone: { type: String, unique: true, sparse: true, trim: true },
@@ -63,9 +49,6 @@ const UserSchema = new mongoose.Schema(
     // Shift a teacher normally works — used for QR attendance
     shift: { type: String, enum: ["Morning", "Afternoon", ""], default: "" },
 
-    // Parent-only fields
-    children: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-
     status: { type: String, enum: ["Active", "Inactive"], default: "Active" },
     joinedAt: { type: Date, default: Date.now },
 
@@ -82,7 +65,6 @@ const UserSchema = new mongoose.Schema(
     // Settings/preferences
     preferences: {
       smsNotifications: { type: Boolean, default: true },
-      emailAlerts: { type: Boolean, default: true },
       twoFactorAuth: { type: Boolean, default: true },
     },
   },

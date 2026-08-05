@@ -12,15 +12,23 @@ const LOGO_PATH = path.join(__dirname, "..", "assets", "logo.jpeg");
 // the page, with font sizes trimmed slightly to match.
 const SUBJECT_COL = 106;
 const MAX_COL = 23;
-const TERM_SUBCOLS = [18, 18, 23, 23]; // Test, Exam, MN, RNK
+const TERM_SUBCOLS = [17, 20, 22, 23]; // Test, Exam, MN, RNK — Exam gets an
+// extra couple points since the wide "M" in EXAM was wrapping at 18pt.
 const TERM_GROUP_W = TERM_SUBCOLS.reduce((a, b) => a + b, 0);
 const YEARLY_SUBCOLS = [34, 28, 24, 24, 55]; // Total, Mean, Rank, Grade, Remarks
 const YEARLY_GROUP_W = YEARLY_SUBCOLS.reduce((a, b) => a + b, 0);
 const TABLE_WIDTH = SUBJECT_COL + MAX_COL + TERM_GROUP_W * 3 + YEARLY_GROUP_W;
 
-const ROW_H = 14.5;
-const CELL_SIZE = 6.3; // data cell font size (was 7 in the wider landscape layout)
-const HEAD_SIZE = 5.7; // sub-header font size (was 6.5)
+const ROW_H = 15.5;
+const CELL_SIZE = 6.9; // data cell font size (bumped up from 6.3 per request)
+const HEAD_SIZE = 5.7; // sub-header font size — kept at its original size; the
+// TEST/EXAM/MN/RNK/GRADE columns are only 18-24pt wide and start wrapping
+// onto two lines at anything larger, so the size bump is applied to the
+// body data (the actual scores/grades) instead of these narrow labels.
+
+// Sky-blue used for every grid line / border on the report card (table
+// gridlines, the photo box, the logo boxes, and the outer page border).
+const GRID_BLUE = "#38bdf8";
 
 // Per the school's instruction: any percentage/grade value below 50% is
 // shown in red, 50% and above in blue.
@@ -33,7 +41,7 @@ function cellRect(doc, x, y, w, h, text, opts = {}) {
   if (fill) {
     doc.save().rect(x, y, w, h).fill(fill).restore();
   }
-  doc.rect(x, y, w, h).stroke("#000");
+  doc.rect(x, y, w, h).stroke(GRID_BLUE);
   if (text !== undefined && text !== null) {
     doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(color);
     const textY = valign === "middle" ? y + (h - size) / 2 + 1 : y + 2;
@@ -223,28 +231,35 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   }
 
   const pageW = doc.page.width;
+  const pageH = doc.page.height;
   const marginX = doc.page.margins.left;
   const usableW = pageW - marginX * 2;
   const hasLogo = fs.existsSync(LOGO_PATH);
 
+  // Outer sky-blue frame around the whole printable area, matching the
+  // reference layout the school provided.
+  doc.rect(10, 10, pageW - 20, pageH - 20).lineWidth(1.2).stroke(GRID_BLUE);
+
   // ── Header: logos + school block ──
   let y = 24;
   if (hasLogo) {
+    doc.rect(marginX - 2, y - 2, 56, 56).stroke(GRID_BLUE);
     doc.image(LOGO_PATH, marginX, y, { width: 52, height: 52 });
+    doc.rect(marginX + usableW - 54, y - 2, 56, 56).stroke(GRID_BLUE);
     doc.image(LOGO_PATH, marginX + usableW - 52, y, { width: 52, height: 52 });
   }
-  doc.font("Helvetica-Bold").fontSize(15).fillColor("#1a2b4a")
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#1a2b4a")
     .text((settings.schoolName || "Nurul-Haq Islamic Academy").toUpperCase(), marginX, y + 2, { width: usableW, align: "center" });
-  doc.font("Helvetica").fontSize(8.5).fillColor("#333")
-    .text((settings.address || "").toUpperCase(), marginX, y + 21, { width: usableW, align: "center" });
-  doc.fontSize(8).text(`Motto: ${settings.motto || "Knowledge and Perseverance"}`, marginX, y + 33, { width: usableW, align: "center" });
-  doc.text(`Moblie: ${settings.phone || ""}`, marginX, y + 44, { width: usableW, align: "center" });
+  doc.font("Helvetica").fontSize(9).fillColor("#333")
+    .text((settings.address || "").toUpperCase(), marginX, y + 22, { width: usableW, align: "center" });
+  doc.fontSize(8.5).text(`Motto: ${settings.motto || "Knowledge and Perseverance"}`, marginX, y + 34, { width: usableW, align: "center" });
+  doc.text(`Moblie: ${settings.phone || ""}`, marginX, y + 45, { width: usableW, align: "center" });
 
   y += 60;
-  doc.moveTo(marginX, y).lineTo(marginX + usableW, y).lineWidth(1.2).stroke("#1a2b4a");
+  doc.moveTo(marginX, y).lineTo(marginX + usableW, y).lineWidth(1.2).stroke(GRID_BLUE);
   y += 8;
 
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#000")
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#000")
     .text(`(${session}) ${termLabel.toUpperCase()} PUPIL'S PROGRESS REPORT SHEET`, marginX, y, { width: usableW, align: "center" });
   y += 20;
 
@@ -282,9 +297,9 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   function drawInfoCol(items, x, w) {
     let iy = infoTop;
     items.forEach(([label, value]) => {
-      doc.font("Helvetica-Bold").fontSize(7.2).fillColor("#000").text(`${label}:`, x, iy, { width: w * 0.5, continued: false });
-      doc.font("Helvetica").fontSize(7.2).text(String(value), x + w * 0.5, iy, { width: w * 0.5 });
-      iy += 13.5;
+      doc.font("Helvetica-Bold").fontSize(7.3).fillColor("#000").text(`${label}:`, x, iy, { width: w * 0.62, continued: false });
+      doc.font("Helvetica").fontSize(7.3).text(String(value), x + w * 0.62, iy, { width: w * 0.38 });
+      iy += 14.5;
     });
     return iy;
   }
@@ -297,7 +312,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // base64 data URL stored on their account (falls back to a placeholder
   // if they don't have one yet).
   const photoX = marginX + usableW - photoW;
-  doc.rect(photoX, infoTop, photoW, photoH).stroke("#000");
+  doc.rect(photoX, infoTop, photoW, photoH).stroke(GRID_BLUE);
   const photoSrc = resolvePhotoImage(student.avatarUrl);
   if (photoSrc) {
     doc.image(photoSrc, photoX + 2, infoTop + 2, { width: photoW - 4, height: photoH - 4, fit: [photoW - 4, photoH - 4] });
@@ -311,7 +326,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   const tableX = marginX + (usableW - TABLE_WIDTH) / 2;
   let ty = y;
 
-  doc.font("Helvetica-Bold").fontSize(8).fillColor("#000")
+  doc.font("Helvetica-Bold").fontSize(8.6).fillColor("#000")
     .text("ACADEMIC PERFORMANCE", tableX, ty, { width: TABLE_WIDTH, align: "center" });
   ty += 13;
 
@@ -371,7 +386,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1], ROW_H, r.mean, { size: CELL_SIZE, bold: true, color: meanColor }); x += YEARLY_SUBCOLS[1];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[2], ROW_H, r.rank, { size: CELL_SIZE }); x += YEARLY_SUBCOLS[2];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[3], ROW_H, r.grade, { size: CELL_SIZE, bold: true, color: meanColor }); x += YEARLY_SUBCOLS[3];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: 5.3 });
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: 5.8 });
     ty += ROW_H;
   });
 
@@ -433,13 +448,13 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   let keyW = TABLE_WIDTH / 5;
   let kx = tableX;
   keysRow1.forEach((k) => {
-    cellRect(doc, kx, ty, keyW, ROW_H, k, { size: 5.6, bold: true, fill: "#fafafa" });
+    cellRect(doc, kx, ty, keyW, ROW_H, k, { size: 6.1, bold: true, fill: "#fafafa" });
     kx += keyW;
   });
   ty += ROW_H;
   kx = tableX;
   keysRow2.forEach((k) => {
-    cellRect(doc, kx, ty, keyW, ROW_H, k, { size: 5.6, bold: true, fill: "#fafafa" });
+    cellRect(doc, kx, ty, keyW, ROW_H, k, { size: 6.1, bold: true, fill: "#fafafa" });
     kx += keyW;
   });
   // Leave the 5th slot on row 2 blank so both rows line up under the table.
@@ -454,7 +469,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   const signX = tableX;
   const dateX = tableX + TABLE_WIDTH - 118;
 
-  doc.font("Helvetica-Bold").fontSize(7.5).fillColor("#000").text("Class Teacher's Comments:", tableX, ty);
+  doc.font("Helvetica-Bold").fontSize(8.2).fillColor("#000").text("Class Teacher's Comments:", tableX, ty);
   doc.font("Helvetica").text("Good, Keep improving", tableX + 118, ty);
   ty += 14;
   doc.font("Helvetica-Bold").text("Sign.:", signX, ty);
@@ -488,7 +503,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   }
 
   ty += 26;
-  doc.font("Helvetica").fontSize(6.5).fillColor("#555")
+  doc.font("Helvetica").fontSize(7).fillColor("#555")
     .text(`Date printed: ${new Date().toString().split(" GMT")[0]}  |  Any alteration invalidates this statement`, tableX, ty, { width: TABLE_WIDTH, align: "center" });
 
   if (!isBulk) doc.end();

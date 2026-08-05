@@ -3,12 +3,11 @@ const Fee = require("../models/Fee");
 const { protect, authorize } = require("../middleware/auth");
 const router = express.Router();
 
-// GET /api/finance - all fee records (principal), or own (student/parent)
+// GET /api/finance - all fee records (principal), or own (student)
 router.get("/", protect, async (req, res) => {
   const filter = {};
   if (req.query.studentId) filter.student = req.query.studentId;
   if (req.user.role === "student") filter.student = req.user._id;
-  if (req.user.role === "parent") filter.student = { $in: req.user.children };
 
   const fees = await Fee.find(filter)
     .populate({

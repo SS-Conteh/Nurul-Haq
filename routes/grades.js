@@ -12,11 +12,8 @@ router.get("/", protect, async (req, res) => {
   if (req.query.term) filter.term = req.query.term;
   if (req.query.subject) filter.subject = req.query.subject;
 
-  // Students & parents may only see their own / their children's grades
+  // Students may only see their own grades
   if (req.user.role === "student") filter.student = req.user._id;
-  if (req.user.role === "parent") {
-    filter.student = { $in: req.user.children };
-  }
 
   if (req.query.classId && !req.query.studentId) {
     const studentIds = await User.find({

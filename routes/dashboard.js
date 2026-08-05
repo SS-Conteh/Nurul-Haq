@@ -180,20 +180,7 @@ router.get("/", protect, async (req, res) => {
     return res.json({ role, overallAvg, attendanceRate, grades });
   }
 
-  // parent
-  const child = req.user.children && req.user.children[0];
-  if (!child) return res.json({ role, message: "No linked child on record" });
-  const [grades, attendance] = await Promise.all([
-    Grade.find({ student: child }).lean(),
-    Attendance.find({ student: child }).select("status").lean(),
-  ]);
-  const overallAvg = avg(grades, (g) => g.total);
-  const present = attendance.filter((a) => a.status !== "Absent").length;
-  const attendanceRate = attendance.length
-    ? Math.round((present / attendance.length) * 100)
-    : 0;
-
-  res.json({ role, overallAvg, attendanceRate });
+  res.json({ role, message: "No dashboard data for this role" });
 });
 
 module.exports = router;

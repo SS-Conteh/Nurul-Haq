@@ -142,7 +142,6 @@ router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res
   try {
     const {
       name,
-      email, // optional for teachers/staff
       password,
       subjects,
       teacherRole,
@@ -170,7 +169,6 @@ router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res
       .toUpperCase();
     const teacher = await User.create({
       name,
-      email,
       password: password || "teacher123",
       role: "teacher",
       subjects: subjects || [],

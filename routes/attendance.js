@@ -192,7 +192,6 @@ router.get("/", protect, async (req, res) => {
     filter.date = { $gte: d, $lt: next };
   }
   if (req.user.role === "student") filter.student = req.user._id;
-  if (req.user.role === "parent") filter.student = { $in: req.user.children };
   if (req.user.role === "teacher") {
     // Only a Class Master may see student attendance records, and only for
     // their own class — a plain subject teacher has no access here at all.

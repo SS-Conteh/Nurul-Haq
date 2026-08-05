@@ -1,6 +1,6 @@
 const express = require("express");
 const User = require("../models/User");
-const { protect, authorize } = require("../middleware/auth");
+const { protect } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -18,7 +18,6 @@ router.put("/profile", protect, async (req, res) => {
   try {
     const allowed = [
       "name",
-      "email",
       "phone",
       "address",
       "dob",
@@ -48,15 +47,6 @@ router.put("/preferences", protect, async (req, res) => {
   user.preferences = { ...user.preferences.toObject(), ...req.body };
   await user.save();
   res.json({ preferences: user.preferences });
-});
-
-// GET /api/users/parents - principal only, list parent accounts
-router.get("/parents", protect, authorize("principal"), async (req, res) => {
-  const parents = await User.find({ role: "parent" }).populate(
-    "children",
-    "name classId",
-  );
-  res.json({ parents });
 });
 
 module.exports = router;

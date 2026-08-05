@@ -26,57 +26,6 @@ function isAwaitingApproval(user) {
   return user.role === "teacher" && user.approvalStatus === "Pending";
 }
 
-// POST /api/auth/login
-router.post("/login", async (req, res) => {
-  try {
-    const { email, password, role } = req.body;
-    if (!email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Email and password are required" });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase() }).select(
-      "+password",
-    );
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-    if (isAwaitingApproval(user)) {
-      return res.status(403).json({
-        message:
-          "Your account is awaiting the Principal's approval. Please check back once it's been approved.",
-      });
-    }
-    if (await isBlockedByMaintenance(user.role)) {
-      return res
-        .status(503)
-        .json({
-          message:
-            "The system is currently under maintenance. Please try again later.",
-        });
-    }
-
-    // The login screen lets a person pick a role tile first (as in the prototype);
-    // if a role was specified, make sure the account actually matches it.
-    if (role && user.role !== role) {
-      return res
-        .status(401)
-        .json({ message: `This account is not registered as a ${role}` });
-    }
-
-    await user.populate([
-      { path: "classId", select: "name" },
-      { path: "classTeacherOf", select: "name subjects level classGroup" },
-      { path: "classesTaught", select: "name level classGroup subjects" },
-    ]);
-    const token = signToken(user._id);
-    res.json({ token, user: user.toSafeObject() });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
 // POST /api/auth/login/staff — Principals, Admins, Teachers, and any
 // other staff log in with phone + password (students never use this
 // endpoint).
@@ -173,7 +122,6 @@ router.post("/signup/teacher", async (req, res) => {
   try {
     const {
       name,
-      email,
       password,
       subjects,
       teacherRole,
@@ -189,7 +137,6 @@ router.post("/signup/teacher", async (req, res) => {
       avatarUrl,
     } = req.body;
 
-    // Email is optional for teachers/staff — only name and password are required.
     if (!name || !password) {
       return res
         .status(400)
@@ -216,7 +163,6 @@ router.post("/signup/teacher", async (req, res) => {
     // never bump a real teacher off their class.
     const teacher = await User.create({
       name,
-      email,
       password,
       role: "teacher",
       subjects: subjects || [],
