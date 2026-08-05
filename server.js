@@ -106,9 +106,10 @@ connectDB().then(() => {
 
 // ── Keep-alive self-ping ──
 // Render's free tier spins the service down after ~15 minutes of no
-// inbound traffic; the next real request then pays a slow cold-start.
-// While in production, ping our own /api/health endpoint every 10 minutes
-// so Render always sees recent traffic and never spins down.
+// inbound traffic; the next real request then pays a slow cold-start
+// (the whole app + DB reconnect from scratch, often 10-30+ seconds).
+// While in production, ping our own /api/health endpoint regularly so
+// Render always sees recent traffic and never spins down.
 function startKeepAlive() {
   if (process.env.NODE_ENV !== "production") return;
 
@@ -116,19 +117,36 @@ function startKeepAlive() {
   const selfUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL;
   if (!selfUrl) {
     console.warn(
-      "[NHIA-SMS] Keep-alive skipped: no RENDER_EXTERNAL_URL or SELF_URL set.",
+      "[NHIA-SMS] Keep-alive skipped: no RENDER_EXTERNAL_URL or SELF_URL set. " +
+        "The service WILL spin down after ~15 min idle and cold-start on the next visit.",
     );
     return;
   }
 
-  const PING_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+  // 7 minutes, well under Render's 15-minute idle limit, so a single
+  // slow/failed ping still leaves margin before the next attempt.
+  const PING_INTERVAL_MS = 7 * 60 * 1000;
+  // If a ping fails, retry quickly instead of waiting the full interval —
+  // otherwise one dropped ping doubles the gap and spins the service down.
+  const RETRY_DELAY_MS = 30 * 1000;
   const url = `${selfUrl.replace(/\/$/, "")}/api/health`;
 
-  setInterval(() => {
+  function ping() {
+    const startedAt = new Date().toISOString();
     fetch(url)
-      .then((res) => console.log(`[NHIA-SMS] Keep-alive ping -> ${res.status}`))
-      .catch((err) => console.error("[NHIA-SMS] Keep-alive ping failed:", err.message));
-  }, PING_INTERVAL_MS);
+      .then((res) => {
+        console.log(`[NHIA-SMS] Keep-alive ping @ ${startedAt} -> ${res.status}`);
+        setTimeout(ping, PING_INTERVAL_MS);
+      })
+      .catch((err) => {
+        console.error(
+          `[NHIA-SMS] Keep-alive ping @ ${startedAt} FAILED (retrying in 30s):`,
+          err.message,
+        );
+        setTimeout(ping, RETRY_DELAY_MS);
+      });
+  }
 
-  console.log(`[NHIA-SMS] Keep-alive enabled, pinging ${url} every 10 min`);
+  setTimeout(ping, PING_INTERVAL_MS);
+  console.log(`[NHIA-SMS] Keep-alive enabled, pinging ${url} every 7 min`);
 }
