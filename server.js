@@ -18,7 +18,11 @@ app.use(compression()); // gzip every response (the ~200kb app.js bundle, JSON, 
 //   ALLOWED_ORIGINS=https://your-app.vercel.app,http://localhost:3000
 // Falls back to CLIENT_ORIGIN (single value) for backwards compatibility,
 // and to "*" (allow all) if neither is set.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || process.env.CLIENT_ORIGIN || "")
+const allowedOrigins = (
+  process.env.ALLOWED_ORIGINS ||
+  process.env.CLIENT_ORIGIN ||
+  ""
+)
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
@@ -30,7 +34,8 @@ app.use(
         ? "*"
         : (origin, callback) => {
             // Allow non-browser requests (no Origin header) and any listed origin.
-            if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+            if (!origin || allowedOrigins.includes(origin))
+              return callback(null, true);
             callback(new Error(`CORS blocked for origin: ${origin}`));
           },
     credentials: true,
@@ -135,7 +140,9 @@ function startKeepAlive() {
     const startedAt = new Date().toISOString();
     fetch(url)
       .then((res) => {
-        console.log(`[NHIA-SMS] Keep-alive ping @ ${startedAt} -> ${res.status}`);
+        console.log(
+          `[NHIA-SMS] Keep-alive ping @ ${startedAt} -> ${res.status}`,
+        );
         setTimeout(ping, PING_INTERVAL_MS);
       })
       .catch((err) => {
