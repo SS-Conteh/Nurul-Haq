@@ -236,9 +236,10 @@ router.get(
         `attachment; filename=IDCard-${(student.admissionNo || student.name).replace(/\s+/g, "_")}.pdf`,
       );
       doc.pipe(res);
-      drawIdCard(doc, {
+      await drawIdCard(doc, {
         student,
         schoolName: settings.schoolName || "Nurul-Haq School",
+        motto: settings.motto || "",
       });
       doc.end();
     } catch (err) {
@@ -297,13 +298,14 @@ router.get(
         `attachment; filename=IDCards-${(req.query.classGroup || req.query.level || "All").replace(/\s+/g, "_")}.pdf`,
       );
       doc.pipe(res);
-      students.forEach((student, i) => {
+      for (let i = 0; i < students.length; i++) {
         if (i > 0) doc.addPage({ size: [CARD_W, CARD_H], margin: 0 });
-        drawIdCard(doc, {
-          student,
+        await drawIdCard(doc, {
+          student: students[i],
           schoolName: settings.schoolName || "Nurul-Haq School",
+          motto: settings.motto || "",
         });
-      });
+      }
       doc.end();
     } catch (err) {
       res.status(500).json({ message: err.message });
