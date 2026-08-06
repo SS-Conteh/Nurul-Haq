@@ -180,7 +180,7 @@ router.get("/", protect, async (req, res) => {
     return res.json({ role, overallAvg, attendanceRate, grades });
   }
 
-  res.json({ role, message: "No dashboard data for this role" });
+  res.json({ role });
 });
 
 module.exports = router;
