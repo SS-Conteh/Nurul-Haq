@@ -249,12 +249,19 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   }
 
   function circleImage(cx, cy, r, imgPath) {
+    // Square (rounded) badge — kept the name "circleImage" to avoid
+    // touching every call site, but it now draws a square medallion
+    // instead of a circular one, per the school's branding preference.
+    const s = r * 2;
+    const x = cx - r;
+    const y = cy - r;
+    const radius = 5;
     doc.save();
-    doc.circle(cx, cy, r + 2).fill("#ffffff");
-    doc.circle(cx, cy, r).clip();
-    doc.image(imgPath, cx - r, cy - r, { width: r * 2, height: r * 2 });
+    doc.roundedRect(x - 2, y - 2, s + 4, s + 4, radius + 2).fill("#ffffff");
+    doc.roundedRect(x, y, s, s, radius).clip();
+    doc.image(imgPath, x, y, { cover: [s, s], align: "center", valign: "center" });
     doc.restore();
-    doc.circle(cx, cy, r).lineWidth(1).stroke(GOLD);
+    doc.roundedRect(x - 2, y - 2, s + 4, s + 4, radius + 2).lineWidth(1).stroke(GOLD);
   }
 
   // ── Faint full-page watermark seal ──
@@ -397,7 +404,16 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   if (photoSrc) {
     doc.save();
     doc.roundedRect(photoX + 2, infoTop + 2, photoW - 4, photoH - 4, 3).clip();
-    doc.image(photoSrc, photoX + 2, infoTop + 2, { width: photoW - 4, height: photoH - 4, fit: [photoW - 4, photoH - 4] });
+    // "cover" (not "fit") so the photo fills the whole placeholder box —
+    // fit would letterbox/leave gaps or crop off-center depending on the
+    // source aspect ratio, which is what was making photos look like only
+    // half showed. cover scales to fill the box completely, then centers
+    // and clips the overflow evenly on both sides.
+    doc.image(photoSrc, photoX + 2, infoTop + 2, {
+      cover: [photoW - 4, photoH - 4],
+      align: "center",
+      valign: "center",
+    });
     doc.restore();
   } else {
     doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("PHOTO", photoX, infoTop + photoH / 2 - 4, { width: photoW, align: "center" });
@@ -601,17 +617,20 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   roundedFillStroke(tableX + 100, ty, stW, 15, 7.5, statusTint, statusColor, 0.8);
   doc.fillColor(statusColor).text(statusText, tableX + 100, ty + 4, { width: stW, align: "center" });
 
-  // Official stamp (school logo, double-ring seal, bottom-right)
-  if (hasLogo) {
+  // Official stamp placeholder (bottom-right) — a dotted circle for the
+  // Principal/Admin to press the school's real rubber stamp onto, rather
+  // than a printed copy of the logo standing in for the stamp.
+  {
     const r = 24;
     const cx = tableX + TABLE_WIDTH - r - 4;
     const cy2 = ty - 2;
     doc.save();
-    doc.circle(cx, cy2, r).clip();
-    doc.image(LOGO_PATH, cx - r, cy2 - r, { width: r * 2, height: r * 2 });
+    doc.dash(1.5, { space: 2.2 });
+    doc.circle(cx, cy2, r).lineWidth(1).stroke(MUTED);
+    doc.undash();
     doc.restore();
-    doc.circle(cx, cy2, r).lineWidth(1).stroke(NAVY);
-    doc.circle(cx, cy2, r + 3).lineWidth(0.7).stroke(GOLD);
+    doc.font("Helvetica").fontSize(5.4).fillColor(MUTED)
+      .text("OFFICIAL STAMP", cx - r, cy2 - 4, { width: r * 2, align: "center" });
   }
 
   ty += 30;
