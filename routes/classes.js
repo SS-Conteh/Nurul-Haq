@@ -84,8 +84,9 @@ router.get("/", protect, async (req, res) => {
   res.json({ classes: enriched });
 });
 
-// POST /api/classes - principal, admin, or juniorAdmin (Nursery-JSS only)
-router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// POST /api/classes - admin, or juniorAdmin (Nursery-JSS only). The
+// Principal can view classes but never registers one.
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     if (req.user.role === "juniorAdmin" && req.body.level === "SSS") {
       return res.status(403).json({
@@ -99,8 +100,9 @@ router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res
   }
 });
 
-// PUT /api/classes/:id
-router.put("/:id", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// PUT /api/classes/:id - admin / juniorAdmin only. The Principal can view
+// classes but never edits one.
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   if (req.user.role === "juniorAdmin") {
     const existing = await SchoolClass.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: "Class not found" });
@@ -117,8 +119,9 @@ router.put("/:id", protect, authorize("principal", "juniorAdmin"), async (req, r
   res.json({ class: cls });
 });
 
-// DELETE /api/classes/:id
-router.delete("/:id", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// DELETE /api/classes/:id - admin / juniorAdmin only. The Principal can
+// view classes but never removes one.
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const existing = await SchoolClass.findById(req.params.id);
   if (!existing) return res.status(404).json({ message: "Class not found" });
   if (req.user.role === "juniorAdmin" && existing.level === "SSS") {

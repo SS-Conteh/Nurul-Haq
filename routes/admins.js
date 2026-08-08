@@ -36,9 +36,10 @@ router.get("/:id", protect, authorize("principal"), async (req, res) => {
   res.json({ admin: admin.toSafeObject() });
 });
 
-// POST /api/admins - principal/General Admin only. Body.role picks which
-// of the two admin roles to create; defaults to "admin" (General Admin).
-router.post("/", protect, authorize("principal"), async (req, res) => {
+// POST /api/admins - General Admin only. Body.role picks which of the two
+// admin roles to create; defaults to "admin" (General Admin). The Principal
+// can view admins but never adds one — only a General Admin can.
+router.post("/", protect, authorize("admin"), async (req, res) => {
   try {
     const {
       name,
@@ -80,8 +81,9 @@ router.post("/", protect, authorize("principal"), async (req, res) => {
   }
 });
 
-// PUT /api/admins/:id - principal/General Admin only
-router.put("/:id", protect, authorize("principal"), async (req, res) => {
+// PUT /api/admins/:id - General Admin only. The Principal can view admins
+// but never edits one.
+router.put("/:id", protect, authorize("admin"), async (req, res) => {
   try {
     const admin = await User.findOne({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
     if (!admin) return res.status(404).json({ message: "Admin not found" });
@@ -96,8 +98,9 @@ router.put("/:id", protect, authorize("principal"), async (req, res) => {
   }
 });
 
-// DELETE /api/admins/:id - principal/General Admin only
-router.delete("/:id", protect, authorize("principal"), async (req, res) => {
+// DELETE /api/admins/:id - General Admin only. The Principal can view
+// admins but never removes one.
+router.delete("/:id", protect, authorize("admin"), async (req, res) => {
   const admin = await User.findOneAndDelete({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
   if (!admin) return res.status(404).json({ message: "Admin not found" });
   res.json({ message: "Admin removed" });

@@ -60,9 +60,10 @@ router.get("/", protect, async (req, res) => {
   });
 });
 
-// GET /api/teachers/pending - principal only. Self-registered teacher/staff
-// signups still waiting for approval.
-router.get("/pending", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// GET /api/teachers/pending - General Admin / Junior School Admin only. The
+// Principal can view teachers but never handles approvals, so is
+// deliberately left out here.
+router.get("/pending", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const pendingFilter = { role: "teacher", approvalStatus: "Pending" };
   if (req.user.role === "juniorAdmin") {
     pendingFilter.level = { $in: ["Nursery", "Primary", "JSS", ""] };
@@ -77,12 +78,13 @@ router.get("/pending", protect, authorize("principal", "juniorAdmin"), async (re
   });
 });
 
-// POST /api/teachers/pending/:id/approve - principal only. Moves a
-// self-registered signup into the real Teachers table.
+// POST /api/teachers/pending/:id/approve - General Admin / Junior School
+// Admin only. Moves a self-registered signup into the real Teachers table.
+// The Principal can view teachers but never approves them.
 router.post(
   "/pending/:id/approve",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     try {
       const teacher = await User.findOne({
@@ -105,12 +107,12 @@ router.post(
   },
 );
 
-// DELETE /api/teachers/pending/:id - principal only. Declines a
-// self-registered signup and removes it entirely.
+// DELETE /api/teachers/pending/:id - General Admin / Junior School Admin
+// only. Declines a self-registered signup and removes it entirely.
 router.delete(
   "/pending/:id",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     const teacher = await User.findOneAndDelete({
       _id: req.params.id,
@@ -136,9 +138,10 @@ router.get("/:id", protect, async (req, res) => {
   res.json({ teacher: teacher.toSafeObject() });
 });
 
-// POST /api/teachers - principal only. Payload mirrors the 3-part signup form:
-// personal info, school info, login info.
-router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// POST /api/teachers - General Admin / Junior School Admin only. Payload
+// mirrors the 3-part signup form: personal info, school info, login info.
+// The Principal can view teachers but never adds one.
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     const {
       name,
@@ -198,8 +201,9 @@ router.post("/", protect, authorize("principal", "juniorAdmin"), async (req, res
   }
 });
 
-// PUT /api/teachers/:id - principal only
-router.put("/:id", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// PUT /api/teachers/:id - General Admin / Junior School Admin only. The
+// Principal can view teachers but never edits one.
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     const existing = await User.findOne({ _id: req.params.id, role: "teacher" });
     if (!existing) return res.status(404).json({ message: "Teacher not found" });
@@ -230,8 +234,9 @@ router.put("/:id", protect, authorize("principal", "juniorAdmin"), async (req, r
   }
 });
 
-// DELETE /api/teachers/:id
-router.delete("/:id", protect, authorize("principal", "juniorAdmin"), async (req, res) => {
+// DELETE /api/teachers/:id - General Admin / Junior School Admin only. The
+// Principal can view teachers but never removes one.
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const existing = await User.findOne({ _id: req.params.id, role: "teacher" });
   if (!existing) return res.status(404).json({ message: "Teacher not found" });
   if (req.user.role === "juniorAdmin" && existing.level === "SSS") {

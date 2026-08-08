@@ -79,11 +79,13 @@ router.get("/", protect, async (req, res) => {
   res.json({ grades });
 });
 
-// POST /api/grades - teacher submits/updates a grade
+// POST /api/grades - teacher submits a grade; admin/juniorAdmin can submit
+// or correct one directly. The Principal can view grades but never
+// edits/submits one.
 router.post(
   "/",
   protect,
-  authorize("teacher", "principal", "juniorAdmin"),
+  authorize("teacher", "juniorAdmin", "admin"),
   async (req, res) => {
     try {
       const { student, subject, term, test, examScore, remark, position } = req.body;
@@ -99,8 +101,9 @@ router.post(
       let grade = await Grade.findOne({ student, subject, term });
       if (grade) {
         // Once a teacher has entered a grade, it's locked from their side —
-        // only an Admin/Principal can go back and correct it. This keeps a
-        // grade tamper-proof from the entering teacher after the fact.
+        // only an Admin (General or Junior School) can go back and correct
+        // it; the Principal can never edit a grade, only view it. This keeps
+        // a grade tamper-proof from the entering teacher after the fact.
         if (req.user.role === "teacher") {
           return res.status(403).json({
             message:
@@ -134,16 +137,17 @@ router.post(
   },
 );
 
-// PUT /api/grades/:id
+// PUT /api/grades/:id - admin / juniorAdmin only. The Principal can view
+// grades but never edits one.
 router.put(
   "/:id",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     // Admin-only: this is the "edit an existing grade" path. Teachers use
     // POST / to submit a grade for the first time, but can never come back
-    // through here — only an Admin/Principal can amend a grade once it's
-    // been entered.
+    // through here — only an Admin (General or Junior School) can amend a
+    // grade once it's been entered. The Principal is view-only for grades.
     const grade = await Grade.findById(req.params.id);
     if (!grade) return res.status(404).json({ message: "Grade not found" });
     Object.assign(grade, req.body);
@@ -152,11 +156,12 @@ router.put(
   },
 );
 
-// DELETE /api/grades/:id
+// DELETE /api/grades/:id - admin / juniorAdmin only. The Principal can view
+// grades but never removes one.
 router.delete(
   "/:id",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     const grade = await Grade.findByIdAndDelete(req.params.id);
     if (!grade) return res.status(404).json({ message: "Grade not found" });

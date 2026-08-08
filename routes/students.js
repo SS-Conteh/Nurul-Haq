@@ -148,10 +148,11 @@ router.get(
 // GET /api/students/meta/next-admission-no — preview the ID that will be
 // assigned to the next enrolled student (shown read-only on the Add form).
 // Must stay above GET /:id or Express would treat "meta" as an :id value.
+// The Principal never enrolls a student, so is left out here.
 router.get(
   "/meta/next-admission-no",
   protect,
-  authorize("principal", "teacher", "juniorAdmin"),
+  authorize("teacher", "juniorAdmin", "admin"),
   async (req, res) => {
     res.json({ admissionNo: await generateNextAdmissionNo() });
   },
@@ -167,11 +168,12 @@ router.get("/:id", protect, async (req, res) => {
   res.json({ student: await enrichStudent(student) });
 });
 
-// POST /api/students  - enroll a new student (principal, admin, juniorAdmin, or teacher)
+// POST /api/students  - enroll a new student (admin, juniorAdmin, or
+// teacher). The Principal can view students but never enrolls one.
 router.post(
   "/",
   protect,
-  authorize("principal", "teacher", "juniorAdmin"),
+  authorize("teacher", "juniorAdmin", "admin"),
   async (req, res) => {
     try {
       const {
@@ -235,11 +237,12 @@ router.post(
   },
 );
 
-// PUT /api/students/:id
+// PUT /api/students/:id - admin, juniorAdmin, or teacher. The Principal can
+// view students but never edits one.
 router.put(
   "/:id",
   protect,
-  authorize("principal", "teacher", "juniorAdmin"),
+  authorize("teacher", "juniorAdmin", "admin"),
   async (req, res) => {
     try {
       const body = { ...req.body };
@@ -267,11 +270,12 @@ router.put(
   },
 );
 
-// DELETE /api/students/:id
+// DELETE /api/students/:id - admin / juniorAdmin only. The Principal can
+// view students but never removes one.
 router.delete(
   "/:id",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("juniorAdmin", "admin"),
   async (req, res) => {
     const student = await User.findOne({
       _id: req.params.id,
