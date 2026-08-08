@@ -21,6 +21,10 @@ const FeeSchema = new mongoose.Schema(
       enum: ["Paid", "Partial", "Unpaid"],
       default: "Unpaid",
     },
+    // Which Admin/Junior Admin entered this payment — the Principal never
+    // creates or edits fee records (view-only), so this is always an audit
+    // trail of admin staff activity for financial record-keeping.
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },
 );
