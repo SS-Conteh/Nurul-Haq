@@ -8,7 +8,7 @@ router.get("/", protect, async (req, res) => {
   if (req.query.classId) filter.classId = req.query.classId;
   const entries = await Timetable.find(filter)
     .populate("teacher", "name")
-    .sort("day time");
+    .sort("sortOrder day");
   res.json({ entries });
 });
 
@@ -17,9 +17,12 @@ router.post("/", protect, authorize("principal"), async (req, res) => {
   res.status(201).json({ entry });
 });
 
-// POST /api/timetable/bulk { classId, entries: [{day,time,subject,teacher,room}] }
+// POST /api/timetable/bulk { classId, entries: [{day,time,sortOrder,isBreak,subject,teacher,room}] }
 // Replaces the whole week's timetable for one class in a single call — used
-// by the principal's "Set Timetable" modal.
+// by the principal's "Set Timetable" modal. Each period row the admin adds
+// (with its own free-text time label) becomes one entry per day it's not
+// left blank for; break rows are stored once per day too (isBreak: true,
+// no subject) so the display grid can show a "Break" row in every column.
 router.post("/bulk", protect, authorize("principal"), async (req, res) => {
   try {
     const { classId, entries } = req.body;

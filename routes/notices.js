@@ -3,19 +3,43 @@ const Notice = require("../models/Notice");
 const { protect, authorize } = require("../middleware/auth");
 const router = express.Router();
 
+// GET /api/notices — category-gated by role:
+//   - student:  only "students" notices
+//   - teacher:  "teachers" AND "students" notices (never locked out of
+//               what's been posted for their own students)
+//   - principal/admin/juniorAdmin: everything, since they're the ones
+//     managing/posting notices in the first place
 router.get("/", protect, async (req, res) => {
-  const notices = await Notice.find({ clearedBy: { $ne: req.user._id } }).sort(
-    "-createdAt",
-  );
+  const filter = { clearedBy: { $ne: req.user._id } };
+  if (req.user.role === "student") {
+    filter.category = "students";
+  } else if (req.user.role === "teacher") {
+    filter.category = { $in: ["teachers", "students"] };
+  }
+  const notices = await Notice.find(filter).sort("-createdAt");
   res.json({ notices });
 });
 
 router.post("/", protect, authorize("principal"), async (req, res) => {
+  const { category } = req.body;
+  if (!["teachers", "students"].includes(category)) {
+    return res
+      .status(400)
+      .json({ message: "category must be 'teachers' or 'students'" });
+  }
   const notice = await Notice.create({ ...req.body, postedBy: req.user._id });
   res.status(201).json({ notice });
 });
 
 router.put("/:id", protect, authorize("principal"), async (req, res) => {
+  if (
+    req.body.category !== undefined &&
+    !["teachers", "students"].includes(req.body.category)
+  ) {
+    return res
+      .status(400)
+      .json({ message: "category must be 'teachers' or 'students'" });
+  }
   const notice = await Notice.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
   });

@@ -10,6 +10,17 @@ const NoticeSchema = new mongoose.Schema(
       enum: ["urgent", "info", "normal"],
       default: "normal",
     },
+    // Who this notice is for. "teachers" notices are never visible to
+    // students. "students" notices are visible to both students and
+    // teachers (a teacher needs to see what's been announced to their own
+    // classes). The Principal/Admin who post notices always see everything
+    // regardless of category — see GET / below.
+    category: {
+      type: String,
+      enum: ["teachers", "students"],
+      required: true,
+      default: "students",
+    },
     postedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     // Users who have cleared/deleted this notice for themselves only —
     // the notice still exists for everyone else and for the principal.
