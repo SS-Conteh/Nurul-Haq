@@ -28,6 +28,7 @@ const Settings = require("../models/Settings");
 const TeacherAttendance = require("../models/TeacherAttendance");
 const DailyQRCode = require("../models/DailyQRCode");
 const Borrower = require("../models/Borrower");
+const BankTransaction = require("../models/BankTransaction");
 
 const C = { accent: "#4f8cff" };
 
@@ -53,6 +54,7 @@ async function run() {
     TeacherAttendance.deleteMany({}),
     DailyQRCode.deleteMany({}),
     Borrower.deleteMany({}),
+    BankTransaction.deleteMany({}),
   ]);
 
   console.log("Creating principal account...");
@@ -66,13 +68,27 @@ async function run() {
     gender: "Male",
   });
 
+  console.log("Creating default General Admin account...");
+  const admin = await User.create({
+    name: "Sylvanus Sesay",
+    password: "admin123",
+    role: "admin",
+    phone: "077588523",
+    initials: "SS",
+    color: C.accent,
+    gender: "Male",
+  });
+
   console.log("Creating default settings...");
   await Settings.create({});
 
   console.log("\n✅ System is empty and ready.\n");
   console.log("Principal login:");
   console.log(`  Phone    : ${principal.phone}`);
-  console.log(`  Password : password123`);
+  console.log(`  Password : Santos0039`);
+  console.log("\nGeneral Admin login:");
+  console.log(`  Phone    : ${admin.phone}`);
+  console.log(`  Password : admin123`);
   console.log(
     "\nEverything else — classes, teachers, students, notices, etc. —",
   );

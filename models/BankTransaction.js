@@ -15,7 +15,12 @@ const BankTransactionSchema = new mongoose.Schema(
     date: { type: Date, default: Date.now },
     bankName: { type: String, default: "" },
     purpose: { type: String, default: "" }, // e.g. "Term 2 fee collections", "Staff salaries"
-    reference: { type: String, default: "" }, // deposit slip / cheque / transfer reference no.
+    // Photo/scan of the deposit slip, withdrawal slip, or transfer receipt —
+    // required on every new transaction so there's always something to
+    // check the ledger against. Stored the same way avatars/assignment
+    // documents are (base64 data URL) — see readFileAsDataUrl in app.js.
+    slipUrl: { type: String, required: true },
+    slipName: { type: String, default: "" },
     recordedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

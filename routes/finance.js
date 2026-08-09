@@ -3,6 +3,7 @@ const Fee = require("../models/Fee");
 const BankTransaction = require("../models/BankTransaction");
 const User = require("../models/User");
 const SchoolClass = require("../models/SchoolClass");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const router = express.Router();
 
@@ -20,6 +21,25 @@ const feePopulate = {
   select: "name initials color classId admissionNo",
   populate: { path: "classId", select: "name level classGroup" },
 };
+
+// Looks up the required fee for a student's level (Nursery/Primary/JSS/SSS)
+// from Settings.feeAmounts, and derives Paid/Partial/Unpaid from the amount
+// actually paid. Used by both POST and PUT below so a payment's status is
+// always computed the same way, never trusted from the client.
+async function computeFeeStatus(studentId, amount) {
+  const student = await User.findById(studentId).populate({
+    path: "classId",
+    select: "level",
+  });
+  const level = student?.classId?.level;
+  const settings = await Settings.findOne();
+  const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
+  let status = "Unpaid";
+  if (amount > 0) {
+    status = requiredFee > 0 ? (amount >= requiredFee ? "Paid" : "Partial") : "Paid";
+  }
+  return { status, expectedAmount: requiredFee };
+}
 
 // GET /api/finance - fee records. Principal/Admin/Junior Admin see the
 // whole school (Junior Admin never sees SSS); a student only ever sees
@@ -69,7 +89,7 @@ router.get(
       .reduce((s, f) => s + f.amount, 0);
     const outstanding = fees
       .filter((f) => f.status !== "Paid")
-      .reduce((s, f) => s + f.amount, 0);
+      .reduce((s, f) => s + Math.max(0, (f.expectedAmount || 0) - f.amount), 0);
     res.json({
       totalCollected,
       outstanding,
@@ -117,13 +137,19 @@ router.get(
       if (!feeByStudent[key]) feeByStudent[key] = f;
     });
 
+    const settings = await Settings.findOne();
+    const requiredFee = (cls.level && settings?.feeAmounts?.[cls.level]) || 0;
+
     const rows = students.map((s) => {
       const f = feeByStudent[String(s._id)];
+      const amount = f ? f.amount : 0;
       return {
         student: s,
         fee: f || null,
         status: f ? f.status : "Unpaid",
-        amount: f ? f.amount : 0,
+        amount,
+        requiredFee,
+        balance: Math.max(0, requiredFee - amount),
       };
     });
 
@@ -133,6 +159,7 @@ router.get(
         name: cls.name,
         level: cls.level,
         classGroup: cls.classGroup,
+        requiredFee,
       },
       fullyPaid: rows.filter((r) => r.status === "Paid"),
       notFullyPaid: rows.filter((r) => r.status !== "Paid"),
@@ -144,7 +171,18 @@ router.get(
 // the Junior Admin nor the Principal appears in this authorize() list.
 router.post("/", protect, authorize("admin"), async (req, res) => {
   try {
-    const fee = await Fee.create({ ...req.body, recordedBy: req.user._id });
+    const amount = Number(req.body.amount) || 0;
+    const { status, expectedAmount } = await computeFeeStatus(
+      req.body.student,
+      amount,
+    );
+    const fee = await Fee.create({
+      ...req.body,
+      amount,
+      status,
+      expectedAmount,
+      recordedBy: req.user._id,
+    });
     await fee.populate(feePopulate);
     res.status(201).json({ fee });
   } catch (err) {
@@ -156,7 +194,18 @@ router.post("/", protect, authorize("admin"), async (req, res) => {
 // restriction as POST above.
 router.put("/:id", protect, authorize("admin"), async (req, res) => {
   try {
-    const body = { ...req.body, recordedBy: req.user._id };
+    const amount = Number(req.body.amount) || 0;
+    const { status, expectedAmount } = await computeFeeStatus(
+      req.body.student,
+      amount,
+    );
+    const body = {
+      ...req.body,
+      amount,
+      status,
+      expectedAmount,
+      recordedBy: req.user._id,
+    };
     const fee = await Fee.findByIdAndUpdate(req.params.id, body, {
       new: true,
       runValidators: true,
@@ -173,7 +222,10 @@ router.put("/:id", protect, authorize("admin"), async (req, res) => {
 // Entering a deposit/withdrawal is General Admin work only — not even the
 // Junior Admin (this is the whole-school bank account, not a level-scoped
 // one) and never the Principal, who can view the ledger for audit purposes
-// but cannot create or edit an entry.
+// but cannot create or edit an entry. There is deliberately no PUT/DELETE
+// here: to prevent tampering with the financial record, a mistake is
+// corrected with a new offsetting entry, never by editing or removing
+// history from the ledger.
 // ─────────────────────────────────────────────────────────────────────────
 
 // GET /api/finance/transactions - Principal (view) + General Admin (view).
@@ -184,13 +236,20 @@ router.get("/transactions", protect, authorize("principal"), async (req, res) =>
   res.json({ transactions });
 });
 
-// GET /api/finance/transactions/summary
+// GET /api/finance/transactions/summary - also reports the one-time
+// opening balance (and who/when set it, once it has been) so the ledger's
+// running balance always includes whatever was in the account before this
+// system started tracking it.
 router.get(
   "/transactions/summary",
   protect,
   authorize("principal"),
   async (req, res) => {
-    const transactions = await BankTransaction.find();
+    const [transactions, settings] = await Promise.all([
+      BankTransaction.find(),
+      Settings.findOne(),
+    ]);
+    const openingBalance = settings?.bankOpeningBalance ?? null;
     const deposits = transactions
       .filter((t) => t.type === "Deposit")
       .reduce((s, t) => s + t.amount, 0);
@@ -200,15 +259,59 @@ router.get(
     res.json({
       deposits,
       withdrawals,
-      balance: deposits - withdrawals,
+      balance: (openingBalance || 0) + deposits - withdrawals,
       count: transactions.length,
+      openingBalance,
+      openingBalanceSetAt: settings?.bankOpeningBalanceSetAt || null,
+      openingBalanceSetBy: settings?.bankOpeningBalanceSetBy || "",
     });
   },
 );
 
-// POST /api/finance/transactions - General Admin only.
+// POST /api/finance/transactions/opening-balance - records the account's
+// starting balance exactly once. General Admin only. Rejected outright if
+// it's already been set — since the system isn't connected to the bank,
+// this figure has to come from a real statement and must stay a fixed,
+// trustworthy starting point rather than something editable later.
+router.post(
+  "/transactions/opening-balance",
+  protect,
+  authorize("admin"),
+  async (req, res) => {
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ message: "A valid balance amount is required" });
+    }
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    if (settings.bankOpeningBalanceSetAt) {
+      return res.status(400).json({
+        message: "The opening bank balance has already been recorded and cannot be changed.",
+      });
+    }
+    settings.bankOpeningBalance = amount;
+    settings.bankOpeningBalanceSetAt = new Date();
+    settings.bankOpeningBalanceSetBy = req.user.name;
+    await settings.save();
+    res.status(201).json({
+      openingBalance: settings.bankOpeningBalance,
+      openingBalanceSetAt: settings.bankOpeningBalanceSetAt,
+      openingBalanceSetBy: settings.bankOpeningBalanceSetBy,
+    });
+  },
+);
+
+// POST /api/finance/transactions - General Admin only. A slip/receipt
+// upload is required on every entry (slipUrl) — enforced here as well as
+// in the schema, so a request that omits it gets a clear message instead
+// of a raw Mongoose validation error.
 router.post("/transactions", protect, authorize("admin"), async (req, res) => {
   try {
+    if (!req.body.slipUrl) {
+      return res.status(400).json({
+        message: "A photo/scan of the deposit or withdrawal slip is required",
+      });
+    }
     const txn = await BankTransaction.create({
       ...req.body,
       recordedBy: req.user._id,
@@ -218,28 +321,6 @@ router.post("/transactions", protect, authorize("admin"), async (req, res) => {
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
-});
-
-// PUT /api/finance/transactions/:id - General Admin only.
-router.put("/transactions/:id", protect, authorize("admin"), async (req, res) => {
-  try {
-    const txn = await BankTransaction.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true },
-    ).populate("recordedBy", "name role");
-    if (!txn) return res.status(404).json({ message: "Transaction not found" });
-    res.json({ transaction: txn });
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
-
-// DELETE /api/finance/transactions/:id - General Admin only.
-router.delete("/transactions/:id", protect, authorize("admin"), async (req, res) => {
-  const txn = await BankTransaction.findByIdAndDelete(req.params.id);
-  if (!txn) return res.status(404).json({ message: "Transaction not found" });
-  res.json({ message: "Transaction removed" });
 });
 
 module.exports = router;

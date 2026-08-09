@@ -144,21 +144,26 @@ router.put(
   },
 );
 
-// POST /api/attendance/teachers - principal marks a teacher's status for a
-// shift/date the teacher never scanned for at all (e.g. On Leave, Sick)
+// POST /api/attendance/teachers - principal/admin marks a teacher's status
+// for a shift/date the teacher never scanned for at all (e.g. On Leave,
+// Sick), or records a manual sign-in/sign-out time from the attendance
+// cards (timeIn/timeOut are optional — only sent when that toggle applies).
 router.post(
   "/teachers",
   protect,
   authorize("principal"),
   async (req, res) => {
-    const { teacher, date, shift, status } = req.body;
+    const { teacher, date, shift, status, timeIn, timeOut } = req.body;
     const allowed = ["Active", "Absent", "On Leave", "Suspended", "Sick"];
     if (!allowed.includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
+    const update = { teacher, date, shift, status };
+    if (timeIn !== undefined) update.timeIn = timeIn;
+    if (timeOut !== undefined) update.timeOut = timeOut;
     const record = await TeacherAttendance.findOneAndUpdate(
       { teacher, date, shift },
-      { teacher, date, shift, status },
+      update,
       { upsert: true, new: true, setDefaultsOnInsert: true },
     );
     res.status(201).json({ record });
