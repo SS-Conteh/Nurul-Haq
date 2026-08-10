@@ -25,10 +25,13 @@ const SettingsSchema = new mongoose.Schema(
     bankOpeningBalance: { type: Number, default: null },
     bankOpeningBalanceSetAt: { type: Date, default: null },
     bankOpeningBalanceSetBy: { type: String, default: "" },
-    // The fee a student owes per term, set once per level by the Principal
-    // or General Admin. Every fee payment's Paid/Partial/Unpaid status is
-    // derived from comparing what a student has paid against their level's
-    // figure here — see routes/finance.js.
+    // The TOTAL fee a student owes for the whole academic year (not per
+    // term), set once per level by the Principal or General Admin. A
+    // student can pay this off however they like — in termly installments
+    // or as a single lump sum — and every fee payment's Paid/Partial/Unpaid
+    // status is derived from comparing what a student has paid so far this
+    // academic year, in total, against their level's figure here — see
+    // routes/finance.js.
     feeAmounts: {
       Nursery: { type: Number, default: 0 },
       Primary: { type: Number, default: 0 },

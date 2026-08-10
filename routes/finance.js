@@ -22,11 +22,14 @@ const feePopulate = {
   populate: { path: "classId", select: "name level classGroup" },
 };
 
-// Looks up the required fee for a student's level (Nursery/Primary/JSS/SSS)
-// from Settings.feeAmounts, and derives Paid/Partial/Unpaid from the amount
-// actually paid. Used by both POST and PUT below so a payment's status is
-// always computed the same way, never trusted from the client.
-async function computeFeeStatus(studentId, amount) {
+// Looks up the ANNUAL required fee for a student's level (Nursery/Primary/
+// JSS/SSS) from Settings.feeAmounts, then derives Paid/Partial/Unpaid from
+// the student's cumulative payments for the current academic year — this
+// installment plus every other one already on file (excluding, on an edit,
+// the record being edited itself, so it isn't counted twice). Used by both
+// POST and PUT below so a payment's status is always computed the same
+// way, never trusted from the client.
+async function computeFeeStatus(studentId, amount, excludeFeeId = null) {
   const student = await User.findById(studentId).populate({
     path: "classId",
     select: "level",
@@ -34,11 +37,19 @@ async function computeFeeStatus(studentId, amount) {
   const level = student?.classId?.level;
   const settings = await Settings.findOne();
   const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
+  const academicYear = settings?.academicYear || "";
+
+  const otherFilter = { student: studentId, academicYear };
+  if (excludeFeeId) otherFilter._id = { $ne: excludeFeeId };
+  const otherFees = await Fee.find(otherFilter).select("amount");
+  const paidSoFar =
+    otherFees.reduce((s, f) => s + (f.amount || 0), 0) + amount;
+
   let status = "Unpaid";
-  if (amount > 0) {
-    status = requiredFee > 0 ? (amount >= requiredFee ? "Paid" : "Partial") : "Paid";
+  if (paidSoFar > 0) {
+    status = requiredFee > 0 ? (paidSoFar >= requiredFee ? "Paid" : "Partial") : "Paid";
   }
-  return { status, expectedAmount: requiredFee };
+  return { status, expectedAmount: requiredFee, academicYear };
 }
 
 // GET /api/finance - fee records. Principal/Admin/Junior Admin see the
@@ -70,13 +81,18 @@ router.get("/", protect, async (req, res) => {
 
 // GET /api/finance/summary - totals for the finance dashboard. The
 // Principal, General Admin, and Junior Admin can all view this (Junior
-// Admin's totals only ever cover Nursery-JSS).
+// Admin's totals only ever cover Nursery-JSS). Fees are annual now, so this
+// groups every payment by student first (a student may have several
+// installment records) and works out each student's year-to-date total
+// before summing up — a per-record sum would double-count a student who
+// paid in more than one installment.
 router.get(
   "/summary",
   protect,
   authorize("principal", "juniorAdmin"),
   async (req, res) => {
-    let fees = await Fee.find().populate({
+    const settings = await Settings.findOne();
+    let fees = await Fee.find({ academicYear: settings?.academicYear || "" }).populate({
       path: "student",
       select: "classId",
       populate: { path: "classId", select: "level" },
@@ -84,32 +100,48 @@ router.get(
     if (req.user.role === "juniorAdmin") {
       fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
     }
-    const totalCollected = fees
-      .filter((f) => f.status === "Paid")
-      .reduce((s, f) => s + f.amount, 0);
-    const outstanding = fees
-      .filter((f) => f.status !== "Paid")
-      .reduce((s, f) => s + Math.max(0, (f.expectedAmount || 0) - f.amount), 0);
-    res.json({
-      totalCollected,
-      outstanding,
-      paidCount: fees.filter((f) => f.status === "Paid").length,
-      totalCount: fees.length,
+
+    const byStudent = {};
+    fees.forEach((f) => {
+      const sid = String(f.student?._id || f.student);
+      if (!byStudent[sid]) {
+        byStudent[sid] = { level: f.student?.classId?.level, total: 0 };
+      }
+      byStudent[sid].total += f.amount || 0;
     });
+
+    let totalCollected = 0;
+    let outstanding = 0;
+    let paidCount = 0;
+    const totalCount = Object.keys(byStudent).length;
+    Object.values(byStudent).forEach(({ level, total }) => {
+      const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
+      totalCollected += total;
+      outstanding += Math.max(0, requiredFee - total);
+      const isPaid = requiredFee > 0 ? total >= requiredFee : total > 0;
+      if (isPaid) paidCount += 1;
+    });
+
+    res.json({ totalCollected, outstanding, paidCount, totalCount });
   },
 );
 
-// GET /api/finance/by-class?classId=&term= - every student in a class
-// alongside their fee status for a term (defaulting to "Unpaid"/0 for a
-// student with no fee record at all yet). This is what the Fee Payment
-// screen uses to build the "Fully Paid" / "Partial or Unpaid" tables for a
-// level+class the Admin has picked. View-only for the Principal.
+// GET /api/finance/by-class?classId= - every student in a class alongside
+// their YEAR-TO-DATE fee position (defaulting to "Unpaid"/0 for a student
+// with no fee record at all yet). `amount` is the sum of every installment
+// a student has paid this academic year — however many payments that took,
+// and whichever terms they were tagged against — compared to the level's
+// annual fee. `payments` carries the full installment history for that
+// student so the Admin can see how the total was built up. This is what
+// the Fee Payment screen uses to build the "Fully Paid" / "Partial or
+// Unpaid" tables for a level+class the Admin has picked. View-only for the
+// Principal.
 router.get(
   "/by-class",
   protect,
   authorize("principal", "juniorAdmin"),
   async (req, res) => {
-    const { classId, term } = req.query;
+    const { classId } = req.query;
     if (!classId) {
       return res.status(400).json({ message: "classId is required" });
     }
@@ -126,27 +158,34 @@ router.get(
       .sort("name");
     const studentIds = students.map((s) => s._id);
 
-    const feeFilter = { student: { $in: studentIds } };
-    if (term) feeFilter.term = term;
-    const fees = await Fee.find(feeFilter).sort("-createdAt");
-
-    // Most recent fee record per student for this term.
-    const feeByStudent = {};
-    fees.forEach((f) => {
-      const key = String(f.student);
-      if (!feeByStudent[key]) feeByStudent[key] = f;
-    });
-
     const settings = await Settings.findOne();
+    const academicYear = settings?.academicYear || "";
     const requiredFee = (cls.level && settings?.feeAmounts?.[cls.level]) || 0;
 
+    const fees = await Fee.find({
+      student: { $in: studentIds },
+      academicYear,
+    }).sort("-paidOn");
+
+    // Every installment payment a student has made this academic year,
+    // most recent first.
+    const paymentsByStudent = {};
+    fees.forEach((f) => {
+      const key = String(f.student);
+      (paymentsByStudent[key] ||= []).push(f);
+    });
+
     const rows = students.map((s) => {
-      const f = feeByStudent[String(s._id)];
-      const amount = f ? f.amount : 0;
+      const payments = paymentsByStudent[String(s._id)] || [];
+      const amount = payments.reduce((sum, f) => sum + (f.amount || 0), 0);
+      const latest = payments[0] || null;
+      const status =
+        amount <= 0 ? "Unpaid" : requiredFee > 0 ? (amount >= requiredFee ? "Paid" : "Partial") : "Paid";
       return {
         student: s,
-        fee: f || null,
-        status: f ? f.status : "Unpaid",
+        fee: latest, // most recent installment — kept for date/receipt display
+        payments, // full installment history for this student, this year
+        status,
         amount,
         requiredFee,
         balance: Math.max(0, requiredFee - amount),
@@ -167,12 +206,13 @@ router.get(
   },
 );
 
-// POST /api/finance - record a fee payment. General Admin only — neither
-// the Junior Admin nor the Principal appears in this authorize() list.
+// POST /api/finance - record an installment fee payment. General Admin
+// only — neither the Junior Admin nor the Principal appears in this
+// authorize() list.
 router.post("/", protect, authorize("admin"), async (req, res) => {
   try {
     const amount = Number(req.body.amount) || 0;
-    const { status, expectedAmount } = await computeFeeStatus(
+    const { status, expectedAmount, academicYear } = await computeFeeStatus(
       req.body.student,
       amount,
     );
@@ -181,6 +221,7 @@ router.post("/", protect, authorize("admin"), async (req, res) => {
       amount,
       status,
       expectedAmount,
+      academicYear,
       recordedBy: req.user._id,
     });
     await fee.populate(feePopulate);
@@ -190,20 +231,24 @@ router.post("/", protect, authorize("admin"), async (req, res) => {
   }
 });
 
-// PUT /api/finance/:id - update a fee payment. General Admin only — same
-// restriction as POST above.
+// PUT /api/finance/:id - update an installment fee payment. General Admin
+// only — same restriction as POST above. The record being edited is
+// excluded from its own cumulative total so editing an amount doesn't
+// count it twice.
 router.put("/:id", protect, authorize("admin"), async (req, res) => {
   try {
     const amount = Number(req.body.amount) || 0;
-    const { status, expectedAmount } = await computeFeeStatus(
+    const { status, expectedAmount, academicYear } = await computeFeeStatus(
       req.body.student,
       amount,
+      req.params.id,
     );
     const body = {
       ...req.body,
       amount,
       status,
       expectedAmount,
+      academicYear,
       recordedBy: req.user._id,
     };
     const fee = await Fee.findByIdAndUpdate(req.params.id, body, {

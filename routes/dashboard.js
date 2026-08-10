@@ -4,6 +4,7 @@ const SchoolClass = require("../models/SchoolClass");
 const Grade = require("../models/Grade");
 const Attendance = require("../models/Attendance");
 const Fee = require("../models/Fee");
+const Settings = require("../models/Settings");
 const Notice = require("../models/Notice");
 const { protect } = require("../middleware/auth");
 const router = express.Router();
@@ -41,6 +42,10 @@ router.get("/", protect, async (req, res) => {
     // Run every independent query in parallel instead of one-at-a-time,
     // and let MongoDB compute the average/sum instead of pulling every
     // grade/fee document into Node just to reduce it in JS.
+    // Fetched first (not in the Promise.all below) because the fee
+    // aggregation needs to know the current academic year to scope its sum.
+    const settings = await Settings.findOne();
+
     const [
       teacherCount,
       studentCount,
@@ -66,8 +71,12 @@ router.get("/", protect, async (req, res) => {
         : Attendance.find({ date: { $gte: todayStart, $lte: todayEnd } })
             .select("status")
             .lean(),
+      // Total cash collected this academic year — every installment a
+      // student has paid, whether that installment alone was Paid/Partial/
+      // Unpaid (fees are annual now, so a "Partial" installment's amount is
+      // still real money in hand and should count toward this figure).
       Fee.aggregate([
-        { $match: { status: "Paid" } },
+        { $match: { academicYear: settings?.academicYear || "" } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
       Notice.find().sort("-createdAt").limit(3).lean(),
