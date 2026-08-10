@@ -1,219 +1,25 @@
-const fs = require("fs");
-const path = require("path");
-const PDFDocument = require("pdfkit");
-const { ordinal, gradeFor, ageFromDob, rankDescending } = require("./reportCardHelpers");
+const fs = require('fs');
 
-const LOGO_PATH = path.join(__dirname, "..", "assets", "logo.jpeg");
+const filePath = './utils/generateReportCard.js';
+let content = fs.readFileSync(filePath, 'utf8');
 
-// ── Portrait A4 layout ──
-// The report card used to be landscape (usable width ~794pt). Printed in
-// portrait instead (usable width ~547pt at a 24pt margin), so every column
-// below is scaled down to ~0.71x of its old landscape width to still fit
-// the page, with font sizes trimmed slightly to match.
-const SUBJECT_COL = 106;
-const MAX_COL = 23;
-const TERM_SUBCOLS = [17, 19, 23, 23]; // Test, Exam, MN, RNK
-const TERM_GROUP_W = TERM_SUBCOLS.reduce((a, b) => a + b, 0);
-const YEARLY_SUBCOLS = [34, 28, 24, 24, 55]; // Total, Mean, Rank, Grade, Remarks
-const YEARLY_GROUP_W = YEARLY_SUBCOLS.reduce((a, b) => a + b, 0);
-const TABLE_WIDTH = SUBJECT_COL + MAX_COL + TERM_GROUP_W * 3 + YEARLY_GROUP_W;
+const startMarker = '// ═══════════════ DRAW THE PDF';
+const startIndex = content.indexOf(startMarker);
 
-const ROW_H = 14.5;
-const CELL_SIZE = 6.3; // data cell font size (was 7 in the wider landscape layout)
-const HEAD_SIZE = 5.7; // sub-header font size (was 6.5)
-
-// Per the school's instruction: any percentage/grade value below 50% is
-// shown in red, 50% and above in blue.
-const COLOR_FAIL = "#dc2626";
-const COLOR_PASS = "#1d4ed8";
-const gradeColor = (pct) => (pct >= 50 ? COLOR_PASS : COLOR_FAIL);
-
-function cellRect(doc, x, y, w, h, text, opts = {}) {
-  const { align = "center", bold = false, size = CELL_SIZE, fill = null, valign = "middle", color = "#000" } = opts;
-  if (fill) {
-    doc.save().rect(x, y, w, h).fill(fill).restore();
-  }
-  doc.rect(x, y, w, h).stroke("#000");
-  if (text !== undefined && text !== null) {
-    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(color);
-    const textY = valign === "middle" ? y + (h - size) / 2 + 1 : y + 2;
-    doc.text(String(text), x + 1, textY, { width: w - 2, align });
-  }
+if (startIndex === -1) {
+  console.error("Could not find start marker");
+  process.exit(1);
 }
 
-// Student photos are stored as base64 data URLs (e.g.
-// "data:image/jpeg;base64,...") straight on the User document, the same
-// way every other photo in this app is stored — never as a filesystem
-// path. This decodes that data URL into an image buffer pdfkit can draw.
-// (Falls back to treating the value as a real file path, in case any
-// older/seeded record still has one.)
-function resolvePhotoImage(avatarUrl) {
-  if (!avatarUrl) return null;
-  const match = /^data:image\/\w+;base64,(.+)$/.exec(avatarUrl);
-  if (match) {
-    try {
-      return Buffer.from(match[1], "base64");
-    } catch (e) {
-      return null;
-    }
-  }
-  if (fs.existsSync(avatarUrl)) return avatarUrl;
-  return null;
-}
+const headContent = content.substring(0, startIndex);
 
-async function computeRoster(Grade, User, student, classId, subjects, terms) {
-  // All classmates (including this student) sharing the same class, used
-  // for per-subject / per-term ranking exactly like the paper report card.
-  const classmates = await User.find({ role: "student", classId }).select("_id");
-  const classmateIds = classmates.map((c) => c._id);
-  const allGrades = await Grade.find({
-    student: { $in: classmateIds },
-    subject: { $in: subjects },
-    term: { $in: terms },
-  });
-  return { classmateIds, allGrades, classSize: classmateIds.length };
-}
-
-/**
- * Streams the report card PDF straight to the Express response.
- * `terms` = [termStringT1, termStringT2, termStringT3] as stored on Grade docs
- * (e.g. "Term 1 · 2026"); `termLabel` = which one is "current" for the title.
- */
-async function generateReportCard(res, { student, classDoc, subjects, terms, termLabel, session, settings, attendanceCounts, Grade, User, doc: sharedDoc, isBulk = false }) {
-  const { allGrades, classSize } = await computeRoster(Grade, User, student, classDoc?._id, subjects, terms);
-
-  // Group grades by subject -> by term
-  function gradesFor(studentId, subject) {
-    return terms.map((t) => allGrades.find((g) => String(g.student) === String(studentId) && g.subject === subject && g.term === t) || null);
-  }
-
-  // Per-subject, per-term rank across the class (by that term's MN)
-  function termRank(subject, termIdx, studentId) {
-    const values = allGrades.filter((g) => g.subject === subject && g.term === terms[termIdx]);
-    const byStudent = new Map();
-    values.forEach((g) => byStudent.set(String(g.student), ((g.test || 0) + (g.examScore || 0)) / 2));
-    // Only rank students who have a value for this term
-    const entries = [...byStudent.entries()];
-    if (!entries.length) return null;
-    const sorted = entries.sort((a, b) => b[1] - a[1]);
-    let rank = 0, lastVal = null, seen = 0;
-    for (const [sid, val] of sorted) {
-      seen += 1;
-      if (val !== lastVal) { rank = seen; lastVal = val; }
-      if (sid === String(studentId)) return rank;
-    }
-    return null;
-  }
-
-  // Yearly per-subject mean across all classmates, for the YEARLY rank column
-  function yearlyStatsFor(studentId, subject) {
-    const rows = gradesFor(studentId, subject);
-    let total = 0, termCount = 0;
-    rows.forEach((g) => {
-      if (g) { total += ((g.test || 0) + (g.examScore || 0)) / 2; termCount += 1; }
-    });
-    // mean = the average of this subject's per-term totals (each already a
-    // 0-100 percentage), NOT total/termCount*2 — that used to silently
-    // halve every mean (e.g. a 75% average was scored as if it were 37.5%,
-    // which is well below FAIL) and misassign the letter grade as a result.
-    const mean = termCount ? total / termCount : 0;
-    return { total, mean, termCount };
-  }
-  function yearlyRank(subject, studentId) {
-    const ids = [...new Set(allGrades.filter((g) => g.subject === subject).map((g) => String(g.student)))];
-    const withMean = ids.map((sid) => [sid, yearlyStatsFor(sid, subject).mean]);
-    if (!withMean.length) return null;
-    const sorted = withMean.sort((a, b) => b[1] - a[1]);
-    let rank = 0, lastVal = null, seen = 0;
-    for (const [sid, val] of sorted) {
-      seen += 1;
-      if (val !== lastVal) { rank = seen; lastVal = val; }
-      if (sid === String(studentId)) return rank;
-    }
-    return null;
-  }
-
-  // ── Build the per-subject rows for THIS student ──
-  const rows = subjects.map((subject) => {
-    const [t1, t2, t3] = gradesFor(student._id, subject);
-    const termCell = (g, idx) => {
-      if (!g) return { test: "", exam: "", mn: "0.0", rnk: "-" };
-      // MN = the plain average of the actual Test and Exam scores entered
-      // for this term — e.g. Test 60, Exam 89 -> MN = (60+89)/2 = 74.5.
-      const mn = ((g.test || 0) + (g.examScore || 0)) / 2;
-      const rnk = termRank(subject, idx, student._id);
-      return { test: g.test ?? "", exam: g.examScore ?? "", mn: mn.toFixed(1), rnk: rnk ? ordinal(rnk) : "-" };
-    };
-    const { total, mean } = yearlyStatsFor(student._id, subject);
-    const rnkY = yearlyRank(subject, student._id);
-    const { grade, remark } = gradeFor(mean);
-    return {
-      subject,
-      max: 100,
-      t1: termCell(t1, 0),
-      t2: termCell(t2, 1),
-      t3: termCell(t3, 2),
-      total: total.toFixed(1).replace(/\.0$/, ""),
-      mean: mean.toFixed(1),
-      rank: rnkY ? ordinal(rnkY) : "-",
-      grade,
-      remark,
-    };
-  });
-
-  // ── Overall totals ──
-  // Each subject-term combination is worth 100: Test and Exam are both raw
-  // scores out of 100, so the combination's actual contribution is their
-  // average (cell.mn), not their raw sum (which can run up to 200).
-  let obtainable = 0, obtained = 0;
-  const colTotals = { t1a: 0, t1b: 0, t2a: 0, t2b: 0, t3a: 0, t3b: 0 };
-  rows.forEach((r) => {
-    [r.t1, r.t2, r.t3].forEach((cell) => {
-      if (cell.test !== "" || cell.exam !== "") {
-        obtainable += 100;
-        obtained += Number(cell.mn) || 0;
-      }
-    });
-    colTotals.t1a += Number(r.t1.test) || 0;
-    colTotals.t1b += Number(r.t1.exam) || 0;
-    colTotals.t2a += Number(r.t2.test) || 0;
-    colTotals.t2b += Number(r.t2.exam) || 0;
-    colTotals.t3a += Number(r.t3.test) || 0;
-    colTotals.t3b += Number(r.t3.exam) || 0;
-  });
-  const avgPct = obtainable ? (obtained / obtainable) * 100 : 0;
-
-  // Overall class position, ranked by each classmate's own average percentage
-  const classmateAverages = new Map();
-  const allStudentIds = [...new Set(allGrades.map((g) => String(g.student)))];
-  allStudentIds.forEach((sid) => {
-    let obt = 0, obtn = 0;
-    subjects.forEach((subject) => {
-      terms.forEach((t) => {
-        const g = allGrades.find((x) => String(x.student) === sid && x.subject === subject && x.term === t);
-        if (g) { obtn += ((g.test || 0) + (g.examScore || 0)) / 2; obt += 100; }
-      });
-    });
-    classmateAverages.set(sid, obt ? (obtn / obt) * 100 : 0);
-  });
-  let overallRank = null;
-  {
-    const sorted = [...classmateAverages.entries()].sort((a, b) => b[1] - a[1]);
-    let rank = 0, lastVal = null, seen = 0;
-    for (const [sid, val] of sorted) {
-      seen += 1;
-      if (val !== lastVal) { rank = seen; lastVal = val; }
-      if (sid === String(student._id)) overallRank = rank;
-    }
-  }
-
-  // ═══════════════ DRAW THE PDF — "Classic" theme ═══════════════
+const newPdfCode = `// ═══════════════ DRAW THE PDF — "Classic" theme ═══════════════
   const doc = sharedDoc || new PDFDocument({ size: "A4", margin: 24 });
   if (!isBulk) {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=ReportCard-${(student.admissionNo || student.name || "student").replace(/\s+/g, "_")}.pdf`,
+      \`attachment; filename=ReportCard-\${(student.admissionNo || student.name || "student").replace(/\\s+/g, "_")}.pdf\`,
     );
     doc.pipe(res);
   }
@@ -268,14 +74,14 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   doc.font("Helvetica").fontSize(9).fillColor("#000")
     .text((settings.address || "NEW JERSEY, ANGOLA").toUpperCase(), textX, y + 28, { width: textW, align: "center" });
   doc.font("Helvetica").fontSize(9).fillColor("#000")
-    .text(`Motto: ${settings.motto || "Knowledge and Perseverance"}`, textX, y + 40, { width: textW, align: "center" });
+    .text(\`Motto: \${settings.motto || "Knowledge and Perseverance"}\`, textX, y + 40, { width: textW, align: "center" });
   doc.font("Helvetica").fontSize(9).fillColor("#000")
-    .text(`Moblie: ${settings.phone || "+23279481354 / +23278221886"}`, textX, y + 52, { width: textW, align: "center" });
+    .text(\`Moblie: \${settings.phone || "+23279481354 / +23278221886"}\`, textX, y + 52, { width: textW, align: "center" });
 
   y += headerH + 15;
 
   // ── Title ──
-  const titleText = `(2025/2026) THIRD TERM PUPIL'S PROGRESS REPORT SHEET`; // hardcoded based on PDF or dynamic
+  const titleText = \`(2025/2026) THIRD TERM PUPIL'S PROGRESS REPORT SHEET\`; // hardcoded based on PDF or dynamic
   doc.font("Helvetica-Bold").fontSize(11).fillColor("#000");
   doc.text(titleText, marginX, y, { width: usableW, align: "center" });
   y += 20;
@@ -380,16 +186,16 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   gx = tableX + SUBJECT_COL + MAX_COL;
   let termNum = 1;
   for (let i = 0; i < 3; i++) {
-    [`TEST ${termNum}`, `TEST ${termNum+1}`, "MN", "RNK"].forEach((label, idx) => {
+    [\`TEST \${termNum}\`, \`TEST \${termNum+1}\`, "MN", "RNK"].forEach((label, idx) => {
       const w = TERM_SUBCOLS[idx];
       drawCell(gx, sy, w, subHeaderH, label, { bold: true, size: 7, color: "#000" });
       gx += w;
     });
     termNum += 2;
   }
-  ["TOTAL\nSCORE", "MEAN", "RANK", "GRADE", "REMARKS"].forEach((label, idx) => {
+  ["TOTAL\\nSCORE", "MEAN", "RANK", "GRADE", "REMARKS"].forEach((label, idx) => {
     const w = YEARLY_SUBCOLS[idx];
-    drawCell(gx, sy, w, subHeaderH, label.replace("\\n", "\n"), { bold: true, size: 7, color: "#000" });
+    drawCell(gx, sy, w, subHeaderH, label.replace("\\\\n", "\\n"), { bold: true, size: 7, color: "#000" });
     gx += w;
   });
 
@@ -474,7 +280,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // ── Keys to rating ──
   drawCell(tableX, ty, TABLE_WIDTH, ROW_H, "KEYS TO RATING", { bold: true, size: 8 });
   ty += ROW_H;
-  const keysStr = "100-75 (EXCELLENT) | 74-70 (V. GOOD) | 69-65 (V. GOOD) | 64-60 (V. GOOD) | 59-55 (GOOD) | 54-50 (GOOD) | 49-45 (FAIR) | 44-40 (FAIR) | 39-0 (FAIL)".replace(/ \| /g, ") ");
+  const keysStr = "100-75 (EXCELLENT) | 74-70 (V. GOOD) | 69-65 (V. GOOD) | 64-60 (V. GOOD) | 59-55 (GOOD) | 54-50 (GOOD) | 49-45 (FAIR) | 44-40 (FAIR) | 39-0 (FAIL)".replace(/ \\| /g, ") ");
   drawCell(tableX, ty, TABLE_WIDTH, ROW_H, keysStr, { size: 7.5 });
   ty += ROW_H + 5;
 
@@ -521,9 +327,13 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   ty += commentsH + 10;
   
   doc.font("Helvetica").fontSize(8).fillColor("#888")
-    .text(`Date printed: ${new Date().toString().split(" GMT")[0]} | Any alteration invalidates this statement`, tableX, ty, { width: TABLE_WIDTH, align: "center" });
+    .text(\`Date printed: \${new Date().toString().split(" GMT")[0]} | Any alteration invalidates this statement\`, tableX, ty, { width: TABLE_WIDTH, align: "center" });
 
   if (!isBulk) doc.end();
 }
 
 module.exports = generateReportCard;
+`;
+
+fs.writeFileSync(filePath, headContent + newPdfCode);
+console.log("Successfully replaced PDF logic.");
