@@ -219,7 +219,7 @@ router.get(
       const student = await User.findOne({
         _id: req.params.studentId,
         role: "student",
-      }).populate("classId", "name level");
+      }).populate("classId", "name level classGroup");
       if (!student)
         return res.status(404).json({ message: "Student not found" });
       if (req.user.role === "juniorAdmin" && student.classId?.level === "SSS") {

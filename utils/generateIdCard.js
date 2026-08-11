@@ -185,10 +185,14 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
   }
   doc.fillColor(INK).text(displayName, rx, 29, { width: rw, lineGap: -1 });
 
-  // level pill — class is used only to compute the expiry date below, it
-  // is never printed on the card itself.
+  // level/class pill — for SSS students this shows their Department
+  // (Art / Science / Commercial) instead of the raw level, since that's
+  // the meaningful "class" distinction at that level; the full class
+  // name (e.g. "SSS 1 Art") is never printed on the card itself, it's
+  // used only to compute the expiry date below.
   const pillY = 47;
-  const pillText = `LEVEL: ${student.classId?.level || "—"}`;
+  const isSSS = student.classId?.level === "SSS";
+  const pillText = isSSS ? `CLASS: ${student.classId?.classGroup || "—"}` : `LEVEL: ${student.classId?.level || "—"}`;
   doc.font("Helvetica-Bold").fontSize(7.2);
   const pillW = Math.min(rw, doc.widthOfString(pillText) + 16);
   doc.roundedRect(rx, pillY, pillW, 14, 7).fill("#e7f1fb");
