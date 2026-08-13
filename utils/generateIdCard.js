@@ -185,48 +185,31 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
   }
   doc.fillColor(INK).text(displayName, rx, 29, { width: rw, lineGap: -1 });
 
-  // Level pill (all students) — and, for SSS students only, a second
-  // pill underneath showing their Department (Art / Science /
-  // Commercial), since "SSS" alone doesn't say which stream they're in.
-  // The full class name (e.g. "SSS 1 Art") is never printed on the card
-  // itself — classGroup is used only for this pill, and separately to
-  // compute the expiry date below.
-  const isSSS = student.classId?.level === "SSS";
-  const levelPillY = 45;
+  // level pill — class is used only to compute the expiry date below, it
+  // is never printed on the card itself.
+  const pillY = 47;
+  const pillText = `LEVEL: ${student.classId?.level || "—"}`;
   doc.font("Helvetica-Bold").fontSize(7.2);
-  const levelPillText = `LEVEL: ${student.classId?.level || "—"}`;
-  const levelPillW = Math.min(rw, doc.widthOfString(levelPillText) + 16);
-  doc.roundedRect(rx, levelPillY, levelPillW, 13, 6.5).fill("#e7f1fb");
-  doc.fillColor("#12345f").text(levelPillText, rx, levelPillY + 3.4, { width: levelPillW, align: "center" });
-
-  let afterPillsY = levelPillY + 13;
-  if (isSSS) {
-    const classPillY = levelPillY + 15;
-    doc.font("Helvetica-Bold").fontSize(7.2);
-    const classPillText = `CLASS: ${student.classId?.classGroup || "—"}`;
-    const classPillW = Math.min(rw, doc.widthOfString(classPillText) + 16);
-    doc.roundedRect(rx, classPillY, classPillW, 13, 6.5).fill("#e7f1fb");
-    doc.fillColor("#12345f").text(classPillText, rx, classPillY + 3.4, { width: classPillW, align: "center" });
-    afterPillsY = classPillY + 13;
-  }
+  const pillW = Math.min(rw, doc.widthOfString(pillText) + 16);
+  doc.roundedRect(rx, pillY, pillW, 14, 7).fill("#e7f1fb");
+  doc.fillColor("#12345f").text(pillText, rx, pillY + 3.7, { width: pillW, align: "center" });
 
   // admission number
-  const idY = afterPillsY + (isSSS ? 5 : 8);
+  const idY = 69;
   doc.font("Helvetica").fontSize(5.6).fillColor(MUTED).text("ADMISSION NO.", rx, idY);
-  doc.font("Helvetica-Bold").fontSize(8.4).fillColor(INK).text(student.admissionNo || "—", rx, idY + 7.2);
+  doc.font("Helvetica-Bold").fontSize(8.6).fillColor(INK).text(student.admissionNo || "—", rx, idY + 7.5);
 
   // date of birth
-  const dobY = idY + (isSSS ? 21 : 24);
+  const dobY = 93;
   doc.font("Helvetica").fontSize(5.6).fillColor(MUTED).text("DATE OF BIRTH", rx, dobY);
-  doc.font("Helvetica-Bold").fontSize(7.2).fillColor(INK).text(student.dob || "—", rx, dobY + 7.2);
+  doc.font("Helvetica-Bold").fontSize(7.4).fillColor(INK).text(student.dob || "—", rx, dobY + 7.5);
 
-  const dividerY = dobY + (isSSS ? 16 : 18);
-  doc.save().moveTo(rx, dividerY).lineTo(W - 12, dividerY).lineWidth(0.5).stroke("#d9e3ee").restore();
+  doc.save().moveTo(rx, 111).lineTo(W - 12, 111).lineWidth(0.5).stroke("#d9e3ee").restore();
 
   // QR code + footer
-  const qrSize = isSSS ? 25 : 28;
+  const qrSize = 28;
   const qrX = W - 12 - qrSize;
-  const qrY = dividerY + 5;
+  const qrY = 116;
   try {
     const qrPayload = JSON.stringify({
       school: schoolName,
@@ -242,9 +225,9 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
 
   const expiryYear = computeExpiryYear(student.classId?.level, student.classId?.name);
   doc.font("Helvetica").fontSize(5).fillColor(MUTED);
-  doc.text("If found, please return to the school", rx, qrY, { width: qrX - rx - 6, lineGap: 1 });
+  doc.text("If found, please return to the school", rx, 116, { width: qrX - rx - 6, lineGap: 1 });
   doc.font("Helvetica-Bold").fontSize(5.6).fillColor("#b91c1c");
-  doc.text(`Expires: ${expiryYear}`, rx, qrY + 16, { width: qrX - rx - 6 });
+  doc.text(`Expires: ${expiryYear}`, rx, 132, { width: qrX - rx - 6 });
   doc.font("Helvetica").fontSize(4.2).fillColor(MUTED).text("scan to verify", qrX - 2, qrY + qrSize + 1, { width: qrSize + 4, align: "center" });
 
   // outer border

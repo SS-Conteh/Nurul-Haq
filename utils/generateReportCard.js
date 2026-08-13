@@ -5,53 +5,42 @@ const { ordinal, gradeFor, ageFromDob, rankDescending } = require("./reportCardH
 
 const LOGO_PATH = path.join(__dirname, "..", "assets", "logo.jpeg");
 const STAMP_PATH = path.join(__dirname, "..", "assets", "stamp.png");
-// Arabic-capable font for subject names printed partly in Arabic (e.g.
-// "Anahwu النحو والصرف"). pdfkit/fontkit can embed and draw the glyphs, but
-// pdfkit does not run a real Arabic text-shaping/BiDi engine, so joined
-// cursive letterforms and right-to-left reordering will not be perfect —
-// this is the closest practical match without a full shaping library.
-const ARABIC_FONT_PATH = path.join(__dirname, "..", "assets", "NotoNaskhArabic-Regular.ttf");
 
-// ── Portrait A4 layout, sized to land the table at ~full page width, ──
-// exactly mirroring the school's paper template (same column grouping,
-// same header wording, same 9-cell grading key, same blue grid/lavender
-// bands, same signature + stamp block).
-const SUBJECT_COL = 90;
-const MAX_COL = 20;
-const TERM_SUBCOLS = [23, 23, 22, 21]; // TEST, EXAM, MN, RNK
+// ── Portrait A4 layout ──
+// The report card used to be landscape (usable width ~794pt). Printed in
+// portrait instead (usable width ~547pt at a 24pt margin), so every column
+// below is scaled down to ~0.71x of its old landscape width to still fit
+// the page, with font sizes trimmed slightly to match.
+const SUBJECT_COL = 106;
+const MAX_COL = 23;
+const TERM_SUBCOLS = [17, 19, 23, 23]; // Test, Exam, MN, RNK
 const TERM_GROUP_W = TERM_SUBCOLS.reduce((a, b) => a + b, 0);
-const YEARLY_SUBCOLS = [50, 24, 22, 30, 40]; // Total Score, Mean, Rank, Grade, Remarks
+const YEARLY_SUBCOLS = [34, 28, 24, 24, 55]; // Total, Mean, Rank, Grade, Remarks
 const YEARLY_GROUP_W = YEARLY_SUBCOLS.reduce((a, b) => a + b, 0);
 const TABLE_WIDTH = SUBJECT_COL + MAX_COL + TERM_GROUP_W * 3 + YEARLY_GROUP_W;
 
-const ROW_H = 15;
-const CELL_SIZE = 7.3;
-const HEAD_SIZE = 6.8;
+const ROW_H = 15.5;
+const CELL_SIZE = 6.9; // data cell font size (bumped up slightly for readability)
+const HEAD_SIZE = 6.3; // sub-header font size (bumped up slightly for readability)
 
-// ── Palette — sampled directly from the paper template, with score text ──
-// brightened a step past the sampled value so pass/fail reads clearly.
-const LAVENDER = "#d9d9f6"; // header banner / section-title bands
-const GRID = "#0000c0"; // every rule and cell border on the sheet
-const PASS_COLOR = "#0000ff"; // score >= 50% — brighter blue than the grid
-const FAIL_COLOR = "#ff0000"; // score < 50%
-const BLACK = "#000000";
-const MUTED_GRAY = "#808080"; // footer timestamp line
+// Grid lines / borders throughout the report card are royal blue.
+const GRID_BLUE = "#1e3a8a";
 
-const gradeColor = (pct) => (pct >= 50 ? PASS_COLOR : FAIL_COLOR);
-const ARABIC_RE = /[\u0600-\u06FF]/;
+// Scores, marks and other highlighted numeric values are red; everything
+// else (labels, subject names) stays black, per the school's palette.
+const SCORE_RED = "#dc2626";
+const gradeColor = () => SCORE_RED;
 
 function cellRect(doc, x, y, w, h, text, opts = {}) {
-  const { align = "center", bold = false, size = CELL_SIZE, fill = null, valign = "middle", color = BLACK } = opts;
+  const { align = "center", bold = false, size = CELL_SIZE, fill = null, valign = "middle", color = "#000" } = opts;
   if (fill) {
     doc.save().rect(x, y, w, h).fill(fill).restore();
   }
-  doc.lineWidth(0.6).rect(x, y, w, h).stroke(GRID);
-  if (text !== undefined && text !== null && text !== "") {
-    const str = String(text);
-    const font = ARABIC_RE.test(str) && doc._arabicFontOk ? "Arabic" : bold ? "Helvetica-Bold" : "Helvetica";
-    doc.font(font).fontSize(size).fillColor(color);
+  doc.rect(x, y, w, h).lineWidth(0.6).stroke(GRID_BLUE);
+  if (text !== undefined && text !== null) {
+    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(color);
     const textY = valign === "middle" ? y + (h - size) / 2 + 1 : y + 2;
-    doc.text(str, x + 1, textY, { width: w - 2, align });
+    doc.text(String(text), x + 1, textY, { width: w - 2, align });
   }
 }
 
@@ -73,14 +62,6 @@ function resolvePhotoImage(avatarUrl) {
   }
   if (fs.existsSync(avatarUrl)) return avatarUrl;
   return null;
-}
-
-// Draws the school's real stamp image, scaled to fit inside the given
-// box and centered — replaces the earlier vector-drawn approximation.
-function drawOfficialStamp(doc, cx, cy, r) {
-  if (!fs.existsSync(STAMP_PATH)) return;
-  const size = r * 2;
-  doc.image(STAMP_PATH, cx - r, cy - r, { fit: [size, size], align: "center", valign: "center" });
 }
 
 async function computeRoster(Grade, User, student, classId, subjects, terms) {
@@ -114,6 +95,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     const values = allGrades.filter((g) => g.subject === subject && g.term === terms[termIdx]);
     const byStudent = new Map();
     values.forEach((g) => byStudent.set(String(g.student), ((g.test || 0) + (g.examScore || 0)) / 2));
+    // Only rank students who have a value for this term
     const entries = [...byStudent.entries()];
     if (!entries.length) return null;
     const sorted = entries.sort((a, b) => b[1] - a[1]);
@@ -126,12 +108,17 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     return null;
   }
 
+  // Yearly per-subject mean across all classmates, for the YEARLY rank column
   function yearlyStatsFor(studentId, subject) {
     const rows = gradesFor(studentId, subject);
     let total = 0, termCount = 0;
     rows.forEach((g) => {
       if (g) { total += ((g.test || 0) + (g.examScore || 0)) / 2; termCount += 1; }
     });
+    // mean = the average of this subject's per-term totals (each already a
+    // 0-100 percentage), NOT total/termCount*2 — that used to silently
+    // halve every mean (e.g. a 75% average was scored as if it were 37.5%,
+    // which is well below FAIL) and misassign the letter grade as a result.
     const mean = termCount ? total / termCount : 0;
     return { total, mean, termCount };
   }
@@ -149,10 +136,13 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     return null;
   }
 
+  // ── Build the per-subject rows for THIS student ──
   const rows = subjects.map((subject) => {
     const [t1, t2, t3] = gradesFor(student._id, subject);
     const termCell = (g, idx) => {
       if (!g) return { test: "", exam: "", mn: "0.0", rnk: "-" };
+      // MN = the plain average of the actual Test and Exam scores entered
+      // for this term — e.g. Test 60, Exam 89 -> MN = (60+89)/2 = 74.5.
       const mn = ((g.test || 0) + (g.examScore || 0)) / 2;
       const rnk = termRank(subject, idx, student._id);
       return { test: g.test ?? "", exam: g.examScore ?? "", mn: mn.toFixed(1), rnk: rnk ? ordinal(rnk) : "-" };
@@ -174,6 +164,10 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     };
   });
 
+  // ── Overall totals ──
+  // Each subject-term combination is worth 100: Test and Exam are both raw
+  // scores out of 100, so the combination's actual contribution is their
+  // average (cell.mn), not their raw sum (which can run up to 200).
   let obtainable = 0, obtained = 0;
   const colTotals = { t1a: 0, t1b: 0, t2a: 0, t2b: 0, t3a: 0, t3b: 0 };
   rows.forEach((r) => {
@@ -192,6 +186,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   });
   const avgPct = obtainable ? (obtained / obtainable) * 100 : 0;
 
+  // Overall class position, ranked by each classmate's own average percentage
   const classmateAverages = new Map();
   const allStudentIds = [...new Set(allGrades.map((g) => String(g.student)))];
   allStudentIds.forEach((sid) => {
@@ -215,8 +210,12 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     }
   }
 
-  // ═══════════════ DRAW THE PDF — exact replica of the paper template ═══════════════
-  const doc = sharedDoc || new PDFDocument({ size: "A4", margin: 20 });
+  // ═══════════════ DRAW THE PDF — "Modern Navy & Gold" theme ═══════════════
+  // In bulk mode the caller already created/piped/will-end a single shared
+  // PDFDocument spanning every student — we just draw this student's page(s)
+  // onto it. In single mode we own the whole lifecycle as before.
+  // Portrait A4 (the school asked for portrait, not the previous landscape).
+  const doc = sharedDoc || new PDFDocument({ size: "A4", margin: 24 });
   if (!isBulk) {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -226,67 +225,117 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     doc.pipe(res);
   }
 
-  if (doc._arabicFontOk === undefined) {
-    try {
-      if (fs.existsSync(ARABIC_FONT_PATH)) {
-        doc.registerFont("Arabic", ARABIC_FONT_PATH);
-        doc._arabicFontOk = true;
-      } else {
-        doc._arabicFontOk = false;
-      }
-    } catch (e) {
-      doc._arabicFontOk = false;
-    }
-  }
-
   const pageW = doc.page.width;
+  const pageH = doc.page.height;
   const marginX = doc.page.margins.left;
   const usableW = pageW - marginX * 2;
   const hasLogo = fs.existsSync(LOGO_PATH);
 
-  let y = 24;
+  // ── Palette — clean blue, lavender, black & red ──
+  const ROYAL = GRID_BLUE; // borders, lines, headings, logo details
+  const ROYAL_2 = "#111d4a"; // deeper royal shade for the group header row
+  const CYAN = "#38bdf8"; // light blue/cyan decorative accents
+  const LAVENDER = "#e6e6fa"; // main header background, some table sections
+  const LAVENDER_DARK = "#cfcff2"; // slightly deeper lavender for group headers
+  const CREAM = "#fbf3d9"; // pale yellow/cream — grading-key section
+  const BLACK = "#161616"; // most text, labels, subject names
+  const MUTED = "#5a5a66";
+  const CARD_BG = "#fbfbff";
+  const BORDER = ROYAL;
+  const ZEBRA = "#f2f2fc";
+  const FAIL_TINT = "#fbe1df";
 
-  // ── Header banner: lavender box, blue border, crest on each side ──
-  const bannerH = 88;
-  doc.save().rect(marginX, y, usableW, bannerH).fill(LAVENDER).restore();
-  doc.lineWidth(1.4).rect(marginX, y, usableW, bannerH).stroke(GRID);
-
-  const logoSize = 70;
-  if (hasLogo) {
-    doc.image(LOGO_PATH, marginX + 12, y + (bannerH - logoSize) / 2, { fit: [logoSize, logoSize], align: "center", valign: "center" });
-    doc.image(LOGO_PATH, marginX + usableW - logoSize - 12, y + (bannerH - logoSize) / 2, { fit: [logoSize, logoSize], align: "center", valign: "center" });
+  function roundedFillStroke(x, y, w, h, r, fill, stroke, lw = 1) {
+    const rr = doc.roundedRect(x, y, w, h, r);
+    if (fill && stroke) rr.fillAndStroke(fill, stroke);
+    else if (fill) rr.fill(fill);
+    else if (stroke) rr.lineWidth(lw).stroke(stroke);
   }
 
-  const textX = marginX + logoSize + 20;
-  const textW = usableW - (logoSize + 20) * 2;
-  doc.font("Helvetica-Bold").fontSize(16).fillColor(BLACK)
-    .text((settings.schoolName || "Nurul-Haq Islamic Academy").toUpperCase(), textX, y + 12, { width: textW, align: "center" });
-  doc.font("Helvetica").fontSize(8.5).fillColor(BLACK)
-    .text((settings.address || "New Jersey, Angola").toUpperCase(), textX, y + 33, { width: textW, align: "center" });
-  doc.font("Helvetica").fontSize(8.5).fillColor(BLACK)
-    .text(`Motto: ${settings.motto || "Knowledge and Perseverance"}`, textX, y + 46, { width: textW, align: "center" });
-  doc.font("Helvetica").fontSize(8.5).fillColor(BLACK)
-    .text(`Moblie: ${settings.phone || ""}`, textX, y + 59, { width: textW, align: "center" });
+  function circleImage(cx, cy, r, imgPath) {
+    // Square (rounded) badge — kept the name "circleImage" to avoid
+    // touching every call site, but it now draws a square medallion
+    // instead of a circular one, per the school's branding preference.
+    const s = r * 2;
+    const x = cx - r;
+    const y = cy - r;
+    const radius = 5;
+    doc.save();
+    doc.roundedRect(x - 2, y - 2, s + 4, s + 4, radius + 2).fill("#ffffff");
+    doc.roundedRect(x, y, s, s, radius).clip();
+    doc.image(imgPath, x, y, { cover: [s, s], align: "center", valign: "center" });
+    doc.restore();
+    doc.roundedRect(x - 2, y - 2, s + 4, s + 4, radius + 2).lineWidth(1).stroke(ROYAL);
+  }
+
+  // ── Faint full-page watermark seal ──
+  if (hasLogo) {
+    doc.save();
+    doc.opacity(0.05);
+    const wmSize = 360;
+    doc.image(LOGO_PATH, (pageW - wmSize) / 2, (pageH - wmSize) / 2 - 20, {
+      width: wmSize,
+      height: wmSize,
+    });
+    doc.opacity(1);
+    doc.restore();
+  }
+
+  // ── Header banner (lavender, rounded, crest medallions) ──
+  let y = 24;
+  const bannerH = 64;
+  doc.roundedRect(marginX, y, usableW, bannerH, 8).fill(LAVENDER);
+
+  if (hasLogo) {
+    circleImage(marginX + 34, y + bannerH / 2, 22, LOGO_PATH);
+    circleImage(marginX + usableW - 34, y + bannerH / 2, 22, LOGO_PATH);
+  }
+
+  const textX = marginX + 66;
+  const textW = usableW - 132;
+  doc.font("Helvetica-Bold").fontSize(14).fillColor(ROYAL)
+    .text((settings.schoolName || "Nurul-Haq Islamic Academy").toUpperCase(), textX, y + 7, { width: textW, align: "center" });
+  doc.font("Helvetica").fontSize(7.3).fillColor(BLACK)
+    .text((settings.address || "").toUpperCase(), textX, y + 24, { width: textW, align: "center" });
+  doc.font("Helvetica").fontSize(6.8).fillColor(ROYAL)
+    .text(`"${settings.motto || "Knowledge and Perseverance"}"`, textX, y + 35, { width: textW, align: "center" });
+  doc.font("Helvetica").fontSize(6.8).fillColor(BLACK)
+    .text(`Tel: ${settings.phone || ""}`, textX, y + 46, { width: textW, align: "center" });
 
   y += bannerH + 8;
 
-  // ── Title line ──
-  const titleText = `(${session}) ${termLabel.toUpperCase()} PUPIL'S PROGRESS REPORT SHEET`;
-  doc.font("Helvetica-Bold").fontSize(14).fillColor(BLACK)
-    .text(titleText, marginX, y, { width: usableW, align: "center" });
-  y += 22;
+  // ── Royal-blue accent divider with a small cyan diamond ornament ──
+  doc.moveTo(marginX, y).lineTo(marginX + usableW / 2 - 8, y).lineWidth(1.4).stroke(ROYAL);
+  doc.moveTo(marginX + usableW / 2 + 8, y).lineTo(marginX + usableW, y).lineWidth(1.4).stroke(ROYAL);
+  doc.save();
+  doc.translate(marginX + usableW / 2, y).rotate(45);
+  doc.rect(-4, -4, 8, 8).fill(CYAN);
+  doc.restore();
+  y += 10;
 
-  // ── Student info block (plain text, no card/border — matches the paper) ──
-  const photoW = 68, photoH = 78;
-  const infoTop = y;
-  const colGap = 8;
-  const colW = (usableW - photoW - colGap * 3) / 3;
-  const col1X = marginX;
-  const lineH = 14.6;
+  // ── Title pill ──
+  const titleText = `${session} · ${termLabel.toUpperCase()} PROGRESS REPORT`;
+  doc.font("Helvetica-Bold").fontSize(9.5);
+  const titleW = doc.widthOfString(titleText) + 28;
+  const pillX = marginX + (usableW - titleW) / 2;
+  roundedFillStroke(pillX, y, titleW, 17, 8.5, LAVENDER, ROYAL, 1);
+  doc.fillColor(ROYAL).text(titleText, pillX, y + 4.5, { width: titleW, align: "center" });
+  y += 17 + 8;
+
+  // ── Student info card ──
+  const photoW = 62, photoH = 72;
+  const cardPad = 10;
+  const infoRows = 7;
+  const cardH = Math.max(infoRows * 13.5, photoH) + cardPad * 2;
+  roundedFillStroke(marginX, y, usableW, cardH, 7, CARD_BG, BORDER, 1);
+
+  const infoTop = y + cardPad;
+  const colW = (usableW - cardPad * 2 - photoW - 14) / 3;
+  const col1X = marginX + cardPad;
 
   const col1 = [
     ["Name", (student.name || "").toUpperCase()],
-    ["Age", ageFromDob(student.dob)],
+    ["Age", ageFromDob(student.dob).replace(" years, ", "y ").replace(" months and ", "m ").replace(" days", "d")],
     ["Date Of Birth", student.dob || "-"],
     ["Sex", student.gender || "-"],
     ["Class", classDoc?.name || "-"],
@@ -294,7 +343,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     ["Class Teacher", classDoc?.classTeacherName || "-"],
   ];
   const col2 = [
-    ["Terminal Duration", settings.terminalDuration || ""],
+    ["Terminal Duration", settings.terminalDuration || "-"],
     ["Term Begins", settings.termBegins || "-"],
     ["Term End", settings.termEnd || "-"],
     ["Next Term Begins", settings.nextTermBegins || "-"],
@@ -304,114 +353,154 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   const col3 = [
     ["No. of Times Present", String(attendanceCounts.present ?? 0)],
     ["No. of Times Absent", String(attendanceCounts.absent ?? 0)],
-    ["Total Score Obtainable", obtainable.toFixed(1)],
-    ["Total Score Obtained", obtained.toFixed(1)],
-    ["Average Percentage", avgPct.toFixed(1)],
+    ["Total Obtainable", obtainable.toFixed(1)],
+    ["Total Obtained", obtained.toFixed(1)],
+    ["Average %", avgPct.toFixed(1)],
     ["Position", overallRank ? ordinal(overallRank) : "-"],
   ];
 
-  function drawInfoCol(items, x, w, colored) {
+  // Shrinks font size until the text fits on one line within maxW (never
+  // wraps), falling back to an ellipsis if it still doesn't fit at the
+  // minimum size — keeps long student names / class-teacher names tidy.
+  function fitOneLine(text, x, yPos, maxW, baseSize, minSize, font, color) {
+    let size = baseSize;
+    doc.font(font);
+    while (size > minSize && doc.fontSize(size).widthOfString(text) > maxW) {
+      size -= 0.3;
+    }
+    let out = text;
+    if (doc.fontSize(size).widthOfString(out) > maxW) {
+      while (out.length > 1 && doc.widthOfString(out + "…") > maxW) {
+        out = out.slice(0, -1);
+      }
+      out += "…";
+    }
+    doc.fontSize(size).fillColor(color).text(out, x, yPos, { width: maxW, lineBreak: false });
+  }
+
+  function drawInfoCol(items, x, w, highlight) {
     let iy = infoTop;
-    const labelFont = "Helvetica-Bold";
-    const labelSize = 8.6;
-    const valueSize = 8.6;
-    const gap = 5;
-    items.forEach(([label, value]) => {
-      doc.font(labelFont).fontSize(labelSize);
-      const labelW = Math.min(doc.widthOfString(label) + gap, w * 0.62);
-      doc.fillColor(BLACK).text(label, x, iy, { width: labelW, lineBreak: false });
-      const isPct = colored && label === "Average Percentage";
-      const color = isPct ? gradeColor(avgPct) : BLACK;
-      const valueW = w - labelW;
-      doc.font("Helvetica").fontSize(valueSize).fillColor(color)
-        .text(String(value), x + labelW, iy, { width: valueW });
-      const lines = Math.ceil(doc.widthOfString(String(value)) / valueW) || 1;
-      iy += lineH * Math.max(1, lines);
+    items.forEach(([label, value], idx) => {
+      doc.font("Helvetica-Bold").fontSize(6.9).fillColor(BLACK)
+        .text(`${label}:`, x, iy, { width: w * 0.5, continued: false });
+      const isAvg = highlight && label === "Average %";
+      const isPos = highlight && label === "Position";
+      if (isAvg || isPos) {
+        fitOneLine(String(value), x + w * 0.5, iy - 0.5, w * 0.5, 7.3, 6, "Helvetica-Bold", isAvg ? SCORE_RED : ROYAL);
+      } else {
+        fitOneLine(String(value), x + w * 0.5, iy, w * 0.5, 7.2, 5.8, "Helvetica", BLACK);
+      }
+      iy += 13.5;
     });
     return iy;
   }
 
   drawInfoCol(col1, col1X, colW, false);
-  drawInfoCol(col2, col1X + colW + colGap, colW, false);
-  drawInfoCol(col3, col1X + (colW + colGap) * 2, colW, true);
+  drawInfoCol(col2, col1X + colW + 7, colW, false);
+  drawInfoCol(col3, col1X + colW * 2 + 14, colW, true);
 
-  // Photo box — plain bordered rectangle, top-right
-  const photoX = marginX + usableW - photoW;
-  doc.lineWidth(0.8).rect(photoX, infoTop, photoW, photoH).stroke(BLACK);
+  // Photo box — rounded, royal-blue-framed
+  const photoX = marginX + usableW - cardPad - photoW;
+  roundedFillStroke(photoX, infoTop, photoW, photoH, 4, "#ffffff", ROYAL, 1.2);
   const photoSrc = resolvePhotoImage(student.avatarUrl);
   if (photoSrc) {
     doc.save();
-    doc.rect(photoX + 1, infoTop + 1, photoW - 2, photoH - 2).clip();
-    doc.image(photoSrc, photoX + 1, infoTop + 1, { cover: [photoW - 2, photoH - 2], align: "center", valign: "center" });
+    doc.roundedRect(photoX + 2, infoTop + 2, photoW - 4, photoH - 4, 3).clip();
+    // "cover" (not "fit") so the photo fills the whole placeholder box —
+    // fit would letterbox/leave gaps or crop off-center depending on the
+    // source aspect ratio, which is what was making photos look like only
+    // half showed. cover scales to fill the box completely, then centers
+    // and clips the overflow evenly on both sides.
+    doc.image(photoSrc, photoX + 2, infoTop + 2, {
+      cover: [photoW - 4, photoH - 4],
+      align: "center",
+      valign: "center",
+    });
     doc.restore();
   } else {
-    doc.font("Helvetica").fontSize(7).fillColor(MUTED_GRAY).text("PHOTO", photoX, infoTop + photoH / 2 - 4, { width: photoW, align: "center" });
+    doc.font("Helvetica").fontSize(7).fillColor(MUTED).text("PHOTO", photoX, infoTop + photoH / 2 - 4, { width: photoW, align: "center" });
   }
 
-  y = infoTop + Math.max(lineH * 8, photoH) + 8;
+  y += cardH + 8;
 
-  // ── Academic performance table — one continuous blue-bordered block ──
+  // ── Academic performance table ──
   const tableX = marginX + (usableW - TABLE_WIDTH) / 2;
   let ty = y;
+
+  // Section label with flanking gold rules
+  doc.font("Helvetica-Bold").fontSize(8.3).fillColor(ROYAL)
+    .text("ACADEMIC PERFORMANCE", tableX, ty, { width: TABLE_WIDTH, align: "center" });
+  ty += 13;
+
   const tableTopY = ty;
 
-  cellRect(doc, tableX, ty, TABLE_WIDTH, ROW_H, "ACADEMIC PERFORMANCE", { bold: true, size: 8.5, fill: LAVENDER });
-  ty += ROW_H;
-
+  // Header row A (grouped) — lavender fill, royal-blue bold text
   const groupHeaderH = ROW_H;
   const subHeaderH = ROW_H;
   let gx = tableX;
-  cellRect(doc, gx, ty, SUBJECT_COL, groupHeaderH + subHeaderH, "SUBJECT", { bold: true, size: 14, fill: "#ffffff" });
+  cellRect(doc, gx, ty, SUBJECT_COL, groupHeaderH + subHeaderH, "SUBJECT", { bold: true, size: HEAD_SIZE, fill: LAVENDER_DARK, color: ROYAL });
   gx += SUBJECT_COL;
-  cellRect(doc, gx, ty, MAX_COL, groupHeaderH + subHeaderH, "MAX", { bold: true, size: HEAD_SIZE, fill: "#ffffff" });
+  cellRect(doc, gx, ty, MAX_COL, groupHeaderH + subHeaderH, "MAX", { bold: true, size: HEAD_SIZE, fill: LAVENDER_DARK, color: ROYAL });
   gx += MAX_COL;
-  ["FIRST TERM", "SECOND TERM", "THIRD TERM"].forEach((label) => {
-    cellRect(doc, gx, ty, TERM_GROUP_W, groupHeaderH, label, { bold: true, size: HEAD_SIZE, fill: "#ffffff" });
+  ["1ST TERM", "2ND TERM", "3RD TERM"].forEach((label) => {
+    cellRect(doc, gx, ty, TERM_GROUP_W, groupHeaderH, label, { bold: true, size: HEAD_SIZE, fill: LAVENDER_DARK, color: ROYAL });
     gx += TERM_GROUP_W;
   });
-  cellRect(doc, gx, ty, YEARLY_GROUP_W, groupHeaderH, "YEARLY", { bold: true, size: HEAD_SIZE, fill: "#ffffff" });
+  cellRect(doc, gx, ty, YEARLY_GROUP_W, groupHeaderH, "YEARLY", { bold: true, size: HEAD_SIZE, fill: LAVENDER_DARK, color: ROYAL });
 
+  // Header row B (sub-columns)
   let sy = ty + groupHeaderH;
   gx = tableX + SUBJECT_COL + MAX_COL;
-  const termTestLabels = [["TEST", "EXAM"], ["TEST", "EXAM"], ["TEST", "EXAM"]];
   for (let i = 0; i < 3; i++) {
-    [termTestLabels[i][0], termTestLabels[i][1], "MN", "RNK"].forEach((label, idx) => {
+    ["TST", "EXM", "MN", "RNK"].forEach((label, idx) => {
       const w = TERM_SUBCOLS[idx];
-      cellRect(doc, gx, sy, w, subHeaderH, label, { bold: true, size: HEAD_SIZE, fill: "#ffffff" });
+      cellRect(doc, gx, sy, w, subHeaderH, label, { bold: true, size: HEAD_SIZE, fill: LAVENDER, color: ROYAL });
       gx += w;
     });
   }
-  ["TOTAL SCORE", "MEAN", "RANK", "GRADE", "REMARKS"].forEach((label, idx) => {
+  ["TOTAL", "MEAN", "RANK", "GRD", "REMARKS"].forEach((label, idx) => {
     const w = YEARLY_SUBCOLS[idx];
-    cellRect(doc, gx, sy, w, subHeaderH, label, { bold: true, size: HEAD_SIZE, fill: "#ffffff" });
+    cellRect(doc, gx, sy, w, subHeaderH, label, { bold: true, size: HEAD_SIZE, fill: LAVENDER, color: ROYAL });
     gx += w;
   });
 
   ty += groupHeaderH + subHeaderH;
 
-  rows.forEach((r) => {
+  // Data rows — zebra striping + tinted grade/remarks cells
+  rows.forEach((r, idx) => {
+    const zebra = idx % 2 === 1 ? ZEBRA : "#ffffff";
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL, ROW_H, r.subject, { align: "left", size: CELL_SIZE, bold: false, color: BLACK });
+    cellRect(doc, x, ty, SUBJECT_COL, ROW_H, r.subject, { align: "left", size: CELL_SIZE, fill: zebra, bold: true, color: BLACK });
     x += SUBJECT_COL;
-    cellRect(doc, x, ty, MAX_COL, ROW_H, r.max, { size: CELL_SIZE });
+    cellRect(doc, x, ty, MAX_COL, ROW_H, r.max, { size: CELL_SIZE, fill: zebra });
     x += MAX_COL;
     [r.t1, r.t2, r.t3].forEach((cell) => {
-      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, cell.test, { size: CELL_SIZE, color: cell.test !== "" ? gradeColor(Number(cell.test)) : BLACK }); x += TERM_SUBCOLS[0];
-      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, cell.exam, { size: CELL_SIZE, color: cell.exam !== "" ? gradeColor(Number(cell.exam)) : BLACK }); x += TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, cell.mn, { size: CELL_SIZE, color: cell.test !== "" ? gradeColor(Number(cell.mn)) : BLACK }); x += TERM_SUBCOLS[2];
-      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, cell.rnk, { size: CELL_SIZE, color: BLACK }); x += TERM_SUBCOLS[3];
+      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, cell.test, { size: CELL_SIZE, fill: zebra, color: cell.test !== "" ? SCORE_RED : "#000" }); x += TERM_SUBCOLS[0];
+      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, cell.exam, { size: CELL_SIZE, fill: zebra, color: cell.exam !== "" ? SCORE_RED : "#000" }); x += TERM_SUBCOLS[1];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, cell.mn, {
+        size: CELL_SIZE,
+        bold: true,
+        fill: zebra,
+        color: cell.test !== "" ? SCORE_RED : "#000",
+      }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, cell.rnk, { size: CELL_SIZE, fill: zebra }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, r.total, { size: CELL_SIZE, color: BLACK }); x += YEARLY_SUBCOLS[0];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[1], ROW_H, r.mean, { size: CELL_SIZE, color: gradeColor(Number(r.mean)) }); x += YEARLY_SUBCOLS[1];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[2], ROW_H, r.rank, { size: CELL_SIZE, color: BLACK }); x += YEARLY_SUBCOLS[2];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[3], ROW_H, r.grade, { size: CELL_SIZE, color: BLACK }); x += YEARLY_SUBCOLS[3];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: CELL_SIZE, color: BLACK });
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, r.total, { size: CELL_SIZE, fill: zebra, color: SCORE_RED }); x += YEARLY_SUBCOLS[0];
+    const hasAnyGrade = r.t1.test !== "" || r.t2.test !== "" || r.t3.test !== "";
+    const isFailing = hasAnyGrade && Number(r.mean) < 50;
+    const meanColor = hasAnyGrade ? SCORE_RED : "#000";
+    const gradeTint = isFailing ? FAIL_TINT : zebra;
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[1], ROW_H, r.mean, { size: CELL_SIZE, bold: true, fill: zebra, color: meanColor }); x += YEARLY_SUBCOLS[1];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[2], ROW_H, r.rank, { size: CELL_SIZE, fill: zebra }); x += YEARLY_SUBCOLS[2];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[3], ROW_H, r.grade, { size: CELL_SIZE, bold: true, fill: gradeTint, color: meanColor }); x += YEARLY_SUBCOLS[3];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: 5.3, fill: gradeTint, color: meanColor });
     ty += ROW_H;
   });
 
+  // TOTAL MARKS row — lavender-tinted summary band
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "TOTAL MARKS", { bold: true, size: CELL_SIZE });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "TOTAL MARKS", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
     const subjCount = subjects.length || 1;
     [
@@ -419,18 +508,19 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       [colTotals.t2a, colTotals.t2b, (colTotals.t2a + colTotals.t2b) / (2 * subjCount)],
       [colTotals.t3a, colTotals.t3b, (colTotals.t3a + colTotals.t3b) / (2 * subjCount)],
     ].forEach(([a, b, mn]) => {
-      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, a || "", { bold: true, size: CELL_SIZE, color: a ? gradeColor(a / subjCount) : BLACK }); x += TERM_SUBCOLS[0];
-      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, b || "", { bold: true, size: CELL_SIZE, color: b ? gradeColor(b / subjCount) : BLACK }); x += TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, mn ? mn.toFixed(1) : "", { bold: true, size: CELL_SIZE, color: a + b ? gradeColor(mn) : BLACK }); x += TERM_SUBCOLS[2];
-      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, ""); x += TERM_SUBCOLS[3];
+      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, a || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[0];
+      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, b || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[1];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, mn ? mn.toFixed(1) : "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, obtained.toFixed(1), { bold: true, size: CELL_SIZE }); x += YEARLY_SUBCOLS[0];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "");
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, obtained.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: SCORE_RED }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
   }
+  // PERCENTAGE row
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "PERCENTAGE", { bold: true, size: CELL_SIZE });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "PERCENTAGE", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
     const subjCount = subjects.length || 1;
     const pctOf = (a, b) => (a + b ? ((a + b) / (2 * subjCount)).toFixed(1) : "0.0");
@@ -439,84 +529,104 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       [colTotals.t2a, colTotals.t2b],
       [colTotals.t3a, colTotals.t3b],
     ].forEach(([a, b]) => {
-      cellRect(doc, x, ty, TERM_SUBCOLS[0] + TERM_SUBCOLS[1], ROW_H, ""); x += TERM_SUBCOLS[0] + TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, pctOf(a, b), { bold: true, size: CELL_SIZE, color: a + b ? gradeColor((a + b) / (2 * subjCount)) : BLACK }); x += TERM_SUBCOLS[2];
-      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, ""); x += TERM_SUBCOLS[3];
+      cellRect(doc, x, ty, TERM_SUBCOLS[0] + TERM_SUBCOLS[1], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[0] + TERM_SUBCOLS[1];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, pctOf(a, b), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, "");
-    cellRect(doc, x + YEARLY_SUBCOLS[0], ty, YEARLY_SUBCOLS[1], ROW_H, avgPct.toFixed(1), { bold: true, size: CELL_SIZE, color: obtainable ? gradeColor(avgPct) : BLACK });
-    cellRect(doc, x + YEARLY_SUBCOLS[0] + YEARLY_SUBCOLS[1], ty, YEARLY_SUBCOLS[2], ROW_H, overallRank ? ordinal(overallRank) : "-", { bold: true, size: CELL_SIZE });
-    cellRect(doc, x + YEARLY_SUBCOLS[0] + YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2], ty, YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "");
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, avgPct.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: obtainable ? SCORE_RED : BLACK }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
   }
 
-  cellRect(doc, tableX, ty, TABLE_WIDTH, ROW_H, "KEYS TO RATING", { bold: true, size: 8, fill: LAVENDER });
-  ty += ROW_H;
+  // Crisp rounded royal-blue frame around the whole table
+  doc.roundedRect(tableX - 1, tableTopY - 1, TABLE_WIDTH + 2, ty - tableTopY + 1, 3).lineWidth(1.3).stroke(GRID_BLUE);
 
-  // Column widths are NOT equal on the paper sheet — each cell is only as
-  // wide as its own text needs (measured proportions from the original).
+  ty += 7;
+
+  // ── Grading key — "KEYS TO RATING" header bar (lavender header, cream
+  // legend cells, per the school's palette) ──
   const keys = [
-    ["100-75 (EXCELLENT)", 82], ["74-70 (V. GOOD)", 69], ["69-65 (V. GOOD)", 69], ["64-60 (V. GOOD)", 69],
-    ["59-55 (GOOD)", 59], ["54-50 (GOOD)", 59], ["49-45 (FAIR)", 53], ["44-40 (FAIR)", 54], ["39-0 (FAIL)", 47],
+    "100-75 (EXCELLENT)", "74-70 (V. GOOD)", "69-65 (V. GOOD)", "64-60 (V. GOOD)", "59-55 (GOOD)",
+    "54-50 (GOOD)", "49-45 (FAIR)", "44-40 (FAIR)", "39-0 (FAIL)",
   ];
-  const weightSum = keys.reduce((s, [, wgt]) => s + wgt, 0);
-  let kx = tableX;
-  keys.forEach(([k, wgt]) => {
-    const cw = (wgt / weightSum) * TABLE_WIDTH;
-    cellRect(doc, kx, ty, cw, ROW_H, k, { align: "left", size: 6.9, color: BLACK });
-    kx += cw;
-  });
+  cellRect(doc, tableX, ty, TABLE_WIDTH, ROW_H, "KEYS TO RATING", { bold: true, size: HEAD_SIZE + 0.5, fill: LAVENDER_DARK, color: ROYAL });
   ty += ROW_H;
+  const keyW = TABLE_WIDTH / keys.length;
+  let kx = tableX;
+  keys.forEach((k) => {
+    cellRect(doc, kx, ty, keyW, ROW_H, k, { size: 5.7, bold: true, fill: CREAM, color: BLACK });
+    kx += keyW;
+  });
+  ty += ROW_H + 8;
 
-  doc.lineWidth(1.4).rect(tableX, tableTopY, TABLE_WIDTH, ty - tableTopY).stroke(GRID);
+  // ── Comments, signatures & promotion status — with the official
+  // stamp broken out into its own section on the right, shown clean
+  // (no outline) and as large as the space allows ──
+  const stampColW = 104;
+  const infoColW = TABLE_WIDTH - stampColW;
+  const commentRowH = 24;
+  const commentsBlockH = commentRowH * 3;
+  const blockTop = ty;
+  const cPad = 8;
+  const signX = tableX + cPad;
+  const signZoneX = tableX + infoColW - 158; // reserved for Sign./Date on the two comment rows
 
-  ty += 8;
+  roundedFillStroke(tableX, blockTop, infoColW, commentsBlockH, 5, "#fdfdfd", GRID_BLUE, 0.8);
 
-  // ── Comments / signatures box + official stamp box, side by side ──
-  const commentH = 88;
-  const stampBoxW = 96;
-  const gapCS = 8;
-  const commentsW = TABLE_WIDTH - stampBoxW - gapCS;
+  function commentRow(idx, accentColor, label, value, { withSignDate = false } = {}) {
+    const ry = blockTop + idx * commentRowH;
+    if (idx > 0) doc.moveTo(tableX, ry).lineTo(tableX + infoColW, ry).lineWidth(0.6).stroke(GRID_BLUE);
+    doc.rect(tableX, ry, 3, commentRowH).fill(accentColor);
+    const midY = ry + commentRowH / 2 - 4;
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(BLACK).text(label, signX, midY, { lineBreak: false });
+    const labelW = doc.widthOfString(label);
+    const valueX = signX + labelW + 6;
+    const valueMaxW = (withSignDate ? signZoneX : tableX + infoColW - cPad) - valueX - 6;
+    fitOneLine(value, valueX, midY, Math.max(valueMaxW, 20), 8, 6, "Helvetica-Oblique", BLACK);
+    if (withSignDate) {
+      const dateStr = new Date().toLocaleDateString("en-GB");
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(BLACK).text("Sign.:", signZoneX, midY);
+      doc.font("Helvetica").fontSize(8).fillColor(BLACK).text("_________", signZoneX + 24, midY);
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(BLACK).text("Date:", signZoneX + 88, midY);
+      doc.font("Helvetica").fontSize(8).fillColor(BLACK).text(dateStr, signZoneX + 114, midY);
+    }
+  }
 
-  doc.lineWidth(1.2).rect(tableX, ty, commentsW, commentH).stroke(GRID);
-  const cPad = 10;
-  let cy = ty + cPad + 4;
-  const dateX = tableX + commentsW - 96;
+  commentRow(0, ROYAL, "Class Teacher's Comments:", "Good, Keep improving", { withSignDate: true });
+  commentRow(1, CYAN, "Principal's Comments:", "Good, Keep improving", { withSignDate: true });
 
-  doc.font("Helvetica-Bold").fontSize(8.8).fillColor(BLACK).text("Class Teacher's Comments:", tableX + cPad, cy, { lineBreak: false });
-  doc.font("Helvetica").fillColor(BLACK).text("  Good, Keep improving", tableX + cPad + 148, cy, { lineBreak: false });
-  doc.font("Helvetica-Bold").text("Sign.:", tableX + cPad + 300, cy, { lineBreak: false });
-  doc.font("Helvetica").text(" ________________", tableX + cPad + 322, cy, { lineBreak: false });
-  doc.font("Helvetica-Bold").text("Date:", dateX, cy, { lineBreak: false });
-  doc.font("Helvetica").text(" " + new Date().toLocaleDateString("en-GB"), dateX + 26, cy);
-  cy += 14;
-  doc.moveTo(tableX + cPad, cy).lineTo(tableX + commentsW - cPad, cy).lineWidth(0.5).stroke(MUTED_GRAY);
-  cy += 14;
-
-  doc.font("Helvetica-Bold").fontSize(8.8).fillColor(BLACK).text("Principal's Comments:", tableX + cPad, cy, { lineBreak: false });
-  doc.font("Helvetica").fillColor(BLACK).text("  Good, Keep improving", tableX + cPad + 128, cy, { lineBreak: false });
-  doc.font("Helvetica-Bold").text("Sign.:", tableX + cPad + 300, cy, { lineBreak: false });
-  doc.font("Helvetica").text(" ________________", tableX + cPad + 322, cy, { lineBreak: false });
-  doc.font("Helvetica-Bold").text("Date:", dateX, cy, { lineBreak: false });
-  doc.font("Helvetica").text(" " + new Date().toLocaleDateString("en-GB"), dateX + 26, cy);
-  cy += 14;
-  doc.moveTo(tableX + cPad, cy).lineTo(tableX + commentsW - cPad, cy).lineWidth(0.5).stroke(MUTED_GRAY);
-  cy += 14;
-
+  // Promotion status — black for a normal/positive outcome, red when the
+  // note signals a repeat/trial/withdrawal, matching the school's red
+  // "highlighted value" accent rather than a traffic-light green/red.
   const statusText = settings.promotionStatusNote || "-";
-  doc.font("Helvetica-Bold").fontSize(8.8).fillColor(BLACK).text("Promotion Status:", tableX + cPad, cy, { lineBreak: false });
-  doc.font("Helvetica").text(" " + statusText, tableX + cPad + 92, cy, { width: commentsW - cPad * 2 - 92 });
-  cy += 14;
-  doc.moveTo(tableX + cPad, cy).lineTo(tableX + commentsW - cPad, cy).lineWidth(0.5).stroke(MUTED_GRAY);
-  cy += 12;
+  const isNegative = /repeat|trial|not\s*promoted|withdraw/i.test(statusText);
+  const statusColor = isNegative ? SCORE_RED : BLACK;
+  commentRow(2, statusColor, "Promotion Status:", statusText, { withSignDate: false });
 
-  doc.font("Helvetica").fontSize(8).fillColor(MUTED_GRAY)
-    .text(`Date printed: ${new Date().toString().split(" GMT")[0]}  |  Any alteration invalidates this statement`, tableX + cPad, cy, { width: commentsW - cPad * 2, align: "center" });
+  // Right: the official stamp gets its own section — a plain vertical
+  // divider (no boxed outline) with the stamp shown as large as the
+  // space allows.
+  const stampX = tableX + infoColW;
+  doc.moveTo(stampX, blockTop).lineTo(stampX, blockTop + commentsBlockH).lineWidth(0.8).stroke(GRID_BLUE);
+  if (fs.existsSync(STAMP_PATH)) {
+    const sPad = 3;
+    doc.image(STAMP_PATH, stampX + sPad, blockTop + sPad, {
+      fit: [stampColW - sPad * 2, commentsBlockH - sPad * 2],
+      align: "center",
+      valign: "center",
+    });
+  } else {
+    doc.font("Helvetica").fontSize(6).fillColor(MUTED)
+      .text("OFFICIAL STAMP", stampX, blockTop + commentsBlockH / 2 - 4, { width: stampColW, align: "center" });
+  }
 
-  const stampX = tableX + commentsW + gapCS;
-  drawOfficialStamp(doc, stampX + stampBoxW / 2, ty + commentH / 2, Math.min(stampBoxW, commentH) / 2 + 4);
+  ty = blockTop + commentsBlockH + 8;
+  doc.moveTo(tableX, ty).lineTo(tableX + TABLE_WIDTH, ty).lineWidth(0.7).stroke(GRID_BLUE);
+  ty += 4;
+  doc.font("Helvetica").fontSize(6.6).fillColor(MUTED)
+    .text(`Date printed: ${new Date().toString().split(" GMT")[0]}  |  Any alteration invalidates this statement`, tableX, ty, { width: TABLE_WIDTH, align: "center" });
 
-  if (!isBulk) doc.end();
+    if (!isBulk) doc.end();
 }
 
 module.exports = generateReportCard;
