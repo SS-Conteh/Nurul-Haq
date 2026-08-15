@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const PDFDocument = require("pdfkit");
-const { ordinal, gradeFor, ageFromDob, rankDescending } = require("./reportCardHelpers");
+const { ordinal, gradeFor, rankDescending } = require("./reportCardHelpers");
 
 const LOGO_PATH = path.join(__dirname, "..", "assets", "logo.jpeg");
 const STAMP_PATH = path.join(__dirname, "..", "assets", "stamp.png");
@@ -26,10 +26,21 @@ const HEAD_SIZE = 6.3; // sub-header font size (bumped up slightly for readabili
 // Grid lines / borders throughout the report card are royal blue.
 const GRID_BLUE = "#1e3a8a";
 
-// Scores, marks and other highlighted numeric values are red; everything
-// else (labels, subject names) stays black, per the school's palette.
+// Scores, marks and other highlighted numeric values are colored by
+// performance: 50 and above is blue (pass), below 50 is red (fail).
+// Everything else (labels, subject names, rank/grade/remarks) stays black.
 const SCORE_RED = "#dc2626";
+const SCORE_BLUE = "#1d4ed8";
 const gradeColor = () => SCORE_RED;
+
+// Returns the pass/fail color for a printed numeric score/mark, or black
+// when there's no value to judge yet (blank cell).
+function scoreColor(value) {
+  if (value === "" || value === null || value === undefined) return "#000";
+  const n = Number(value);
+  if (Number.isNaN(n)) return "#000";
+  return n >= 50 ? SCORE_BLUE : SCORE_RED;
+}
 
 function cellRect(doc, x, y, w, h, text, opts = {}) {
   const { align = "center", bold = false, size = CELL_SIZE, fill = null, valign = "middle", color = "#000" } = opts;
@@ -325,7 +336,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // ── Student info card ──
   const photoW = 62, photoH = 72;
   const cardPad = 10;
-  const infoRows = 7;
+  const infoRows = 6;
   const cardH = Math.max(infoRows * 13.5, photoH) + cardPad * 2;
   roundedFillStroke(marginX, y, usableW, cardH, 7, CARD_BG, BORDER, 1);
 
@@ -335,7 +346,6 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
 
   const col1 = [
     ["Name", (student.name || "").toUpperCase()],
-    ["Age", ageFromDob(student.dob).replace(" years, ", "y ").replace(" months and ", "m ").replace(" days", "d")],
     ["Date Of Birth", student.dob || "-"],
     ["Sex", student.gender || "-"],
     ["Class", classDoc?.name || "-"],
@@ -465,6 +475,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   });
 
   ty += groupHeaderH + subHeaderH;
+  const dataTopY = ty; // top of the first data row — used later to draw unbroken column dividers
 
   // Data rows — zebra striping + tinted grade/remarks cells
   rows.forEach((r, idx) => {
@@ -475,25 +486,27 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     cellRect(doc, x, ty, MAX_COL, ROW_H, r.max, { size: CELL_SIZE, fill: zebra });
     x += MAX_COL;
     [r.t1, r.t2, r.t3].forEach((cell) => {
-      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, cell.test, { size: CELL_SIZE, fill: zebra, color: cell.test !== "" ? SCORE_RED : "#000" }); x += TERM_SUBCOLS[0];
-      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, cell.exam, { size: CELL_SIZE, fill: zebra, color: cell.exam !== "" ? SCORE_RED : "#000" }); x += TERM_SUBCOLS[1];
+      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, cell.test, { size: CELL_SIZE, fill: zebra, color: scoreColor(cell.test) }); x += TERM_SUBCOLS[0];
+      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, cell.exam, { size: CELL_SIZE, fill: zebra, color: scoreColor(cell.exam) }); x += TERM_SUBCOLS[1];
       cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, cell.mn, {
         size: CELL_SIZE,
         bold: true,
         fill: zebra,
-        color: cell.test !== "" ? SCORE_RED : "#000",
+        color: cell.test !== "" ? scoreColor(cell.mn) : "#000",
       }); x += TERM_SUBCOLS[2];
-      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, cell.rnk, { size: CELL_SIZE, fill: zebra }); x += TERM_SUBCOLS[3];
+      // RNK, like GRD and REMARKS, is always black — it's a position, not a score.
+      cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, cell.rnk, { size: CELL_SIZE, fill: zebra, color: BLACK }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, r.total, { size: CELL_SIZE, fill: zebra, color: SCORE_RED }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, r.total, { size: CELL_SIZE, fill: zebra, color: scoreColor(r.total) }); x += YEARLY_SUBCOLS[0];
     const hasAnyGrade = r.t1.test !== "" || r.t2.test !== "" || r.t3.test !== "";
     const isFailing = hasAnyGrade && Number(r.mean) < 50;
-    const meanColor = hasAnyGrade ? SCORE_RED : "#000";
+    const meanColor = hasAnyGrade ? scoreColor(r.mean) : "#000";
     const gradeTint = isFailing ? FAIL_TINT : zebra;
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1], ROW_H, r.mean, { size: CELL_SIZE, bold: true, fill: zebra, color: meanColor }); x += YEARLY_SUBCOLS[1];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[2], ROW_H, r.rank, { size: CELL_SIZE, fill: zebra }); x += YEARLY_SUBCOLS[2];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[3], ROW_H, r.grade, { size: CELL_SIZE, bold: true, fill: gradeTint, color: meanColor }); x += YEARLY_SUBCOLS[3];
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: 5.3, fill: gradeTint, color: meanColor });
+    // RANK, GRD and REMARKS are always black, regardless of pass/fail.
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[2], ROW_H, r.rank, { size: CELL_SIZE, fill: zebra, color: BLACK }); x += YEARLY_SUBCOLS[2];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[3], ROW_H, r.grade, { size: CELL_SIZE, bold: true, fill: gradeTint, color: BLACK }); x += YEARLY_SUBCOLS[3];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[4], ROW_H, r.remark, { size: 5.3, fill: gradeTint, color: BLACK });
     ty += ROW_H;
   });
 
@@ -508,12 +521,12 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       [colTotals.t2a, colTotals.t2b, (colTotals.t2a + colTotals.t2b) / (2 * subjCount)],
       [colTotals.t3a, colTotals.t3b, (colTotals.t3a + colTotals.t3b) / (2 * subjCount)],
     ].forEach(([a, b, mn]) => {
-      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, a || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[0];
-      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, b || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, mn ? mn.toFixed(1) : "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, a || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a ? scoreColor(a) : BLACK }); x += TERM_SUBCOLS[0];
+      cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, b || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: b ? scoreColor(b) : BLACK }); x += TERM_SUBCOLS[1];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, mn ? mn.toFixed(1) : "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(mn) : BLACK }); x += TERM_SUBCOLS[2];
       cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, obtained.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: SCORE_RED }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, obtained.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: scoreColor(obtained) }); x += YEARLY_SUBCOLS[0];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
   }
@@ -530,12 +543,32 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       [colTotals.t3a, colTotals.t3b],
     ].forEach(([a, b]) => {
       cellRect(doc, x, ty, TERM_SUBCOLS[0] + TERM_SUBCOLS[1], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[0] + TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, pctOf(a, b), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? SCORE_RED : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, pctOf(a, b), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(pctOf(a, b)) : BLACK }); x += TERM_SUBCOLS[2];
       cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, avgPct.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: obtainable ? SCORE_RED : BLACK }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, avgPct.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: obtainable ? scoreColor(avgPct) : BLACK }); x += YEARLY_SUBCOLS[0];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
+  }
+
+  // The TOTAL MARKS / PERCENTAGE summary rows merge several columns into
+  // wide label cells (e.g. SUBJECT+MAX, or MEAN+RANK+GRD+REMARKS), which
+  // drops the vertical divider between those columns for just those rows.
+  // Redraw every column divider as one unbroken line from the top of the
+  // data rows down to the bottom of the last summary row, so every
+  // downward grid line is equal length and touches the bottom border.
+  {
+    const dividerXs = [];
+    let cx = tableX;
+    const colWidths = [SUBJECT_COL, MAX_COL, ...TERM_SUBCOLS, ...TERM_SUBCOLS, ...TERM_SUBCOLS, ...YEARLY_SUBCOLS];
+    colWidths.forEach((w) => {
+      cx += w;
+      dividerXs.push(cx);
+    });
+    dividerXs.pop(); // last boundary is the table's outer right edge — the frame below covers it
+    dividerXs.forEach((dx) => {
+      doc.moveTo(dx, dataTopY).lineTo(dx, ty).lineWidth(0.6).stroke(GRID_BLUE);
+    });
   }
 
   // Crisp rounded royal-blue frame around the whole table

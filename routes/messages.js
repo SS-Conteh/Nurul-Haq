@@ -20,11 +20,14 @@ router.get("/sent", protect, async (req, res) => {
   res.json({ messages });
 });
 
-// GET /api/messages/contacts - people this user can message (teachers, admin, principal)
+// GET /api/messages/contacts - people this user can message (teachers and
+// every admin-layer account, so the oversight tier can query teachers,
+// admins, and bursars, and everyone else can reach the office).
 router.get("/contacts", protect, async (req, res) => {
   const contacts = await User.find({
-    role: { $in: ["teacher", "principal", "admin"] },
-  }).select("name role subject");
+    role: { $in: ["teacher", "principal", "admin", "juniorAdmin", "seniorBursar", "juniorBursar"] },
+    _id: { $ne: req.user._id },
+  }).select("name role subject principalTitle");
   res.json({ contacts });
 });
 

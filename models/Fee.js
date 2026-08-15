@@ -34,6 +34,10 @@ const FeeSchema = new mongoose.Schema(
       enum: ["Cash", "Bank Transfer", "Mobile Money", ""],
       default: "",
     },
+    // A photo/scan of the physical receipt handed to the student — kept as
+    // proof of payment. Mandatory going forward (enforced in
+    // routes/finance.js, not here, so older records recorded before this
+    // was required don't fail validation retroactively).
     receipt: { type: String, default: "" },
     // Auto-computed by the server (routes/finance.js) from the student's
     // cumulative year-to-date payments (including this one) vs.

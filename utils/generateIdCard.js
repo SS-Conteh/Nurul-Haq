@@ -185,14 +185,28 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
   }
   doc.fillColor(INK).text(displayName, rx, 29, { width: rw, lineGap: -1 });
 
-  // level pill — class is used only to compute the expiry date below, it
-  // is never printed on the card itself.
+  // class pill — e.g. "Class: SSS 1 Art" or "Class: Nursery 1". Falls back
+  // to level if a class was somehow never assigned.
   const pillY = 47;
-  const pillText = `LEVEL: ${student.classId?.level || "—"}`;
+  const pillText = `Class: ${student.classId?.name || student.classId?.level || "—"}`;
   doc.font("Helvetica-Bold").fontSize(7.2);
   const pillW = Math.min(rw, doc.widthOfString(pillText) + 16);
   doc.roundedRect(rx, pillY, pillW, 14, 7).fill("#e7f1fb");
   doc.fillColor("#12345f").text(pillText, rx, pillY + 3.7, { width: pillW, align: "center" });
+
+  // house pill — small colored dot + house name, right beside the level
+  // pill, only when the student has a house set.
+  if (student.house) {
+    const houseX = rx + pillW + 6;
+    const houseText = student.house;
+    doc.font("Helvetica-Bold").fontSize(6.6);
+    const houseW = Math.min(rw - pillW - 6, doc.widthOfString(houseText) + 16);
+    if (houseW > 14) {
+      doc.roundedRect(houseX, pillY, houseW, 14, 7).fill("#fdf1dc");
+      doc.circle(houseX + 8, pillY + 7, 2.6).fill(GOLD);
+      doc.fillColor(TEXT_GOLD).text(houseText, houseX + 12, pillY + 3.9, { width: houseW - 14 });
+    }
+  }
 
   // admission number
   const idY = 69;
@@ -234,4 +248,56 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
   doc.roundedRect(0.75, 0.75, W - 1.5, H - 1.5, 6).lineWidth(1).stroke("#c9d6e3");
 }
 
-module.exports = { drawIdCard, CARD_W, CARD_H, computeExpiryYear };
+// Lays out every student's ID card in a grid on A4 pages — as many cards as
+// fit per page, moving to a new page only once the current one is full.
+// Used by the bulk ID-card PDF download so a batch prints straight onto
+// perforated/cut card sheets instead of one page per card.
+const A4_W = 595.28,
+  A4_H = 841.89;
+const PAGE_MARGIN = 24;
+const CARD_GAP = 12;
+const CARDS_PER_ROW = Math.max(
+  1,
+  Math.floor((A4_W - 2 * PAGE_MARGIN + CARD_GAP) / (CARD_W + CARD_GAP)),
+);
+const CARDS_PER_COL = Math.max(
+  1,
+  Math.floor((A4_H - 2 * PAGE_MARGIN + CARD_GAP) / (CARD_H + CARD_GAP)),
+);
+const CARDS_PER_PAGE = CARDS_PER_ROW * CARDS_PER_COL;
+
+async function layoutIdCardsOnA4(doc, students, cardOptions) {
+  // Center the grid on the page, so any leftover margin is spread evenly
+  // instead of piling up on the right/bottom.
+  const gridW = CARDS_PER_ROW * CARD_W + (CARDS_PER_ROW - 1) * CARD_GAP;
+  const gridH = CARDS_PER_COL * CARD_H + (CARDS_PER_COL - 1) * CARD_GAP;
+  const offsetX = (A4_W - gridW) / 2;
+  const offsetY = (A4_H - gridH) / 2;
+
+  for (let i = 0; i < students.length; i++) {
+    const posOnPage = i % CARDS_PER_PAGE;
+    if (i > 0 && posOnPage === 0) doc.addPage({ size: "A4", margin: 0 });
+    const col = posOnPage % CARDS_PER_ROW;
+    const row = Math.floor(posOnPage / CARDS_PER_ROW);
+    const x = offsetX + col * (CARD_W + CARD_GAP);
+    const y = offsetY + row * (CARD_H + CARD_GAP);
+
+    // Faint cut-guide so a printed sheet can be trimmed into individual
+    // cards with scissors/a paper cutter.
+    doc
+      .save()
+      .rect(x - 3, y - 3, CARD_W + 6, CARD_H + 6)
+      .dash(3, { space: 2 })
+      .lineWidth(0.5)
+      .stroke("#cbd5e1")
+      .undash()
+      .restore();
+
+    doc.save();
+    doc.translate(x, y);
+    await drawIdCard(doc, { student: students[i], ...cardOptions });
+    doc.restore();
+  }
+}
+
+module.exports = { drawIdCard, layoutIdCardsOnA4, CARD_W, CARD_H, computeExpiryYear };

@@ -6,7 +6,7 @@ const Attendance = require("../models/Attendance");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const generateReportCard = require("../utils/generateReportCard");
-const { drawIdCard, CARD_W, CARD_H } = require("../utils/generateIdCard");
+const { drawIdCard, layoutIdCardsOnA4, CARD_W, CARD_H } = require("../utils/generateIdCard");
 
 const router = express.Router();
 
@@ -17,7 +17,7 @@ const TERM_LABELS = { 1: "FIRST TERM", 2: "SECOND TERM", 3: "THIRD TERM" };
 router.get(
   "/report-card/:studentId",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     try {
       const student = await User.findOne({
@@ -94,7 +94,7 @@ router.get(
 router.get(
   "/report-cards/bulk",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     try {
       if (req.user.role === "juniorAdmin" && req.query.level === "SSS") {
@@ -213,7 +213,7 @@ router.get(
 router.get(
   "/id-card/:studentId",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     try {
       const student = await User.findOne({
@@ -252,7 +252,7 @@ router.get(
 router.get(
   "/id-cards/bulk",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     try {
       if (req.user.role === "juniorAdmin" && req.query.level === "SSS") {
@@ -291,21 +291,19 @@ router.get(
 
       const settings = (await Settings.findOne()) || {};
       const PDFDocument = require("pdfkit");
-      const doc = new PDFDocument({ size: [CARD_W, CARD_H], margin: 0 });
+      // A4 sheet with as many cards per page as fit, rather than one page
+      // per card — ready to print straight onto card stock and cut apart.
+      const doc = new PDFDocument({ size: "A4", margin: 0 });
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
         `attachment; filename=IDCards-${(req.query.classGroup || req.query.level || "All").replace(/\s+/g, "_")}.pdf`,
       );
       doc.pipe(res);
-      for (let i = 0; i < students.length; i++) {
-        if (i > 0) doc.addPage({ size: [CARD_W, CARD_H], margin: 0 });
-        await drawIdCard(doc, {
-          student: students[i],
-          schoolName: settings.schoolName || "Nurul-Haq School",
-          motto: settings.motto || "",
-        });
-      }
+      await layoutIdCardsOnA4(doc, students, {
+        schoolName: settings.schoolName || "Nurul-Haq School",
+        motto: settings.motto || "",
+      });
       doc.end();
     } catch (err) {
       res.status(500).json({ message: err.message });

@@ -15,7 +15,7 @@ function signToken(id) {
 // Maintenance mode blocks everyone except the Principal (and Admins,
 // who have the same full access) from logging in.
 async function isBlockedByMaintenance(role) {
-  if (role === "principal" || role === "admin" || role === "juniorAdmin") return false;
+  if (["principal", "admin", "juniorAdmin", "seniorBursar", "juniorBursar"].includes(role)) return false;
   const settings = await Settings.findOne();
   return !!settings?.preferences?.maintenanceMode;
 }
@@ -39,7 +39,7 @@ router.post("/login/staff", async (req, res) => {
     }
     const user = await User.findOne({
       phone: phone.trim(),
-      role: { $in: ["principal", "admin", "juniorAdmin", "teacher"] },
+      role: { $in: ["principal", "admin", "juniorAdmin", "seniorBursar", "juniorBursar", "teacher"] },
     }).select("+password");
     if (!user || !(await user.comparePassword(password))) {
       return res

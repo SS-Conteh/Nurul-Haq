@@ -9,11 +9,12 @@ const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────
 // FEES
-// Entering/editing a fee payment is General Admin work only — not even the
-// Junior Admin, and never the Principal (who can view every payment but
-// never records or changes one). `authorize("admin")` is used verbatim on
-// every write route below instead of the usual `authorize("principal", …)`
-// helper (which would silently let the Principal through too).
+// Entering/editing a fee payment is General Admin work, the Junior School
+// Admin's for Nursery–JSS, or a Bursar's for their own level (Senior
+// Bursar: SSS, Junior Bursar: Nursery–JSS — enforced by
+// levelScopeViolation() below on every write route). Never the Principal,
+// who can view every payment but never records or changes one. A receipt
+// upload is mandatory on every entry, for every one of these roles alike.
 // ─────────────────────────────────────────────────────────────────────────
 
 const feePopulate = {
@@ -65,8 +66,12 @@ router.get("/", protect, async (req, res) => {
 
   let fees = await Fee.find(filter).populate(feePopulate).sort("-paidOn");
 
-  if (req.user.role === "juniorAdmin") {
+  if (req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") {
     fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
+  }
+  // The Senior Bursar handles SSS fees only.
+  if (req.user.role === "seniorBursar") {
+    fees = fees.filter((f) => f.student?.classId?.level === "SSS");
   }
   if (req.query.level) {
     fees = fees.filter((f) => f.student?.classId?.level === req.query.level);
@@ -80,8 +85,11 @@ router.get("/", protect, async (req, res) => {
 });
 
 // GET /api/finance/summary - totals for the finance dashboard. The
-// Principal, General Admin, and Junior Admin can all view this (Junior
-// Admin's totals only ever cover Nursery-JSS). Fees are annual now, so this
+// Principal, General Admin, Junior Admin, and both Bursars can all view
+// this. The Junior Admin deliberately sees the FULL school's totals here
+// (including SSS) for transparency, even though they can only ever record
+// or drill into Nursery–JSS fees elsewhere — a Bursar's totals, by
+// contrast, only ever cover their own level. Fees are annual now, so this
 // groups every payment by student first (a student may have several
 // installment records) and works out each student's year-to-date total
 // before summing up — a per-record sum would double-count a student who
@@ -89,7 +97,7 @@ router.get("/", protect, async (req, res) => {
 router.get(
   "/summary",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const settings = await Settings.findOne();
     let fees = await Fee.find({ academicYear: settings?.academicYear || "" }).populate({
@@ -97,8 +105,14 @@ router.get(
       select: "classId",
       populate: { path: "classId", select: "level" },
     });
-    if (req.user.role === "juniorAdmin") {
+    // Only a Bursar's totals are scoped to their own level — the Junior
+    // Admin sees the whole school here for transparency (see comment
+    // above).
+    if (req.user.role === "juniorBursar") {
       fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
+    }
+    if (req.user.role === "seniorBursar") {
+      fees = fees.filter((f) => f.student?.classId?.level === "SSS");
     }
 
     const byStudent = {};
@@ -113,16 +127,27 @@ router.get(
     let totalCollected = 0;
     let outstanding = 0;
     let paidCount = 0;
+    let seniorCollected = 0;
+    let juniorCollected = 0;
     const totalCount = Object.keys(byStudent).length;
     Object.values(byStudent).forEach(({ level, total }) => {
       const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
       totalCollected += total;
+      if (level === "SSS") seniorCollected += total;
+      else if (level) juniorCollected += total;
       outstanding += Math.max(0, requiredFee - total);
       const isPaid = requiredFee > 0 ? total >= requiredFee : total > 0;
       if (isPaid) paidCount += 1;
     });
 
-    res.json({ totalCollected, outstanding, paidCount, totalCount });
+    res.json({
+      totalCollected,
+      outstanding,
+      paidCount,
+      totalCount,
+      seniorCollected,
+      juniorCollected,
+    });
   },
 );
 
@@ -139,7 +164,7 @@ router.get(
 router.get(
   "/by-class",
   protect,
-  authorize("principal", "juniorAdmin"),
+  authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const { classId } = req.query;
     if (!classId) {
@@ -147,9 +172,14 @@ router.get(
     }
     const cls = await SchoolClass.findById(classId);
     if (!cls) return res.status(404).json({ message: "Class not found" });
-    if (req.user.role === "juniorAdmin" && cls.level === "SSS") {
+    if ((req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") && cls.level === "SSS") {
       return res.status(403).json({
-        message: "A Junior School Admin cannot view SSS fee records",
+        message: "A Junior School Admin/Bursar cannot view SSS fee records",
+      });
+    }
+    if (req.user.role === "seniorBursar" && cls.level !== "SSS") {
+      return res.status(403).json({
+        message: "The Senior Bursar only handles SSS fee records",
       });
     }
 
@@ -206,61 +236,98 @@ router.get(
   },
 );
 
-// POST /api/finance - record an installment fee payment. General Admin
-// only — neither the Junior Admin nor the Principal appears in this
-// authorize() list.
-router.post("/", protect, authorize("admin"), async (req, res) => {
-  try {
-    const amount = Number(req.body.amount) || 0;
-    const { status, expectedAmount, academicYear } = await computeFeeStatus(
-      req.body.student,
-      amount,
-    );
-    const fee = await Fee.create({
-      ...req.body,
-      amount,
-      status,
-      expectedAmount,
-      academicYear,
-      recordedBy: req.user._id,
-    });
-    await fee.populate(feePopulate);
-    res.status(201).json({ fee });
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
+// A bursar, or the Junior School Admin, may only record a fee for a
+// student in their own scope — Senior Bursar: SSS, Junior Bursar/Junior
+// School Admin: Nursery/Primary/JSS. General Admin has no restriction.
+// Returns an error message string if out of scope, otherwise null.
+async function levelScopeViolation(role, studentId) {
+  if (role !== "seniorBursar" && role !== "juniorBursar" && role !== "juniorAdmin") return null;
+  const student = await User.findById(studentId).populate({ path: "classId", select: "level" });
+  const level = student?.classId?.level;
+  const inScope = role === "seniorBursar" ? level === "SSS" : level && level !== "SSS";
+  return inScope ? null : "This student is outside your level";
+}
 
-// PUT /api/finance/:id - update an installment fee payment. General Admin
-// only — same restriction as POST above. The record being edited is
-// excluded from its own cumulative total so editing an amount doesn't
-// count it twice.
-router.put("/:id", protect, authorize("admin"), async (req, res) => {
-  try {
-    const amount = Number(req.body.amount) || 0;
-    const { status, expectedAmount, academicYear } = await computeFeeStatus(
-      req.body.student,
-      amount,
-      req.params.id,
-    );
-    const body = {
-      ...req.body,
-      amount,
-      status,
-      expectedAmount,
-      academicYear,
-      recordedBy: req.user._id,
-    };
-    const fee = await Fee.findByIdAndUpdate(req.params.id, body, {
-      new: true,
-      runValidators: true,
-    }).populate(feePopulate);
-    if (!fee) return res.status(404).json({ message: "Fee record not found" });
-    res.json({ fee });
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
+// POST /api/finance - record an installment fee payment. General Admin,
+// the Junior School Admin (Nursery–JSS only), or a Bursar for their own
+// level (Senior Bursar: SSS, Junior Bursar: Nursery–JSS). Never the
+// Principal. A receipt upload is mandatory on every entry — enforced here
+// as well as in the schema — for every one of these roles alike.
+router.post(
+  "/",
+  protect,
+  authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
+    try {
+      const violation = await levelScopeViolation(req.user.role, req.body.student);
+      if (violation) return res.status(403).json({ message: violation });
+      if (!req.body.receipt) {
+        return res.status(400).json({
+          message: "A receipt upload is required to record this payment",
+        });
+      }
+      const amount = Number(req.body.amount) || 0;
+      const { status, expectedAmount, academicYear } = await computeFeeStatus(
+        req.body.student,
+        amount,
+      );
+      const fee = await Fee.create({
+        ...req.body,
+        amount,
+        status,
+        expectedAmount,
+        academicYear,
+        recordedBy: req.user._id,
+      });
+      await fee.populate(feePopulate);
+      res.status(201).json({ fee });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  },
+);
+
+// PUT /api/finance/:id - update an installment fee payment. Same roles and
+// scope as POST above. The record being edited is excluded from its own
+// cumulative total so editing an amount doesn't count it twice.
+router.put(
+  "/:id",
+  protect,
+  authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
+    try {
+      const violation = await levelScopeViolation(req.user.role, req.body.student);
+      if (violation) return res.status(403).json({ message: violation });
+      if (!req.body.receipt) {
+        return res.status(400).json({
+          message: "A receipt upload is required to record this payment",
+        });
+      }
+      const amount = Number(req.body.amount) || 0;
+      const { status, expectedAmount, academicYear } = await computeFeeStatus(
+        req.body.student,
+        amount,
+        req.params.id,
+      );
+      const body = {
+        ...req.body,
+        amount,
+        status,
+        expectedAmount,
+        academicYear,
+        recordedBy: req.user._id,
+      };
+      const fee = await Fee.findByIdAndUpdate(req.params.id, body, {
+        new: true,
+        runValidators: true,
+      }).populate(feePopulate);
+      if (!fee) return res.status(404).json({ message: "Fee record not found" });
+      res.json({ fee });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  },
+);
 
 // ─────────────────────────────────────────────────────────────────────────
 // BANK TRANSACTIONS (deposits/withdrawals)
@@ -273,8 +340,15 @@ router.put("/:id", protect, authorize("admin"), async (req, res) => {
 // history from the ledger.
 // ─────────────────────────────────────────────────────────────────────────
 
-// GET /api/finance/transactions - Principal (view) + General Admin (view).
-router.get("/transactions", protect, authorize("principal"), async (req, res) => {
+// GET /api/finance/transactions - Principal (view), General Admin, Junior
+// School Admin (view), and both Bursars (the bank ledger isn't
+// level-split, so either bursar can see and record the whole school's
+// deposits/withdrawals).
+router.get(
+  "/transactions",
+  protect,
+  authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
   const transactions = await BankTransaction.find()
     .populate("recordedBy", "name role")
     .sort("-date");
@@ -288,7 +362,7 @@ router.get("/transactions", protect, authorize("principal"), async (req, res) =>
 router.get(
   "/transactions/summary",
   protect,
-  authorize("principal"),
+  authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const [transactions, settings] = await Promise.all([
       BankTransaction.find(),
@@ -346,11 +420,15 @@ router.post(
   },
 );
 
-// POST /api/finance/transactions - General Admin only. A slip/receipt
-// upload is required on every entry (slipUrl) — enforced here as well as
-// in the schema, so a request that omits it gets a clear message instead
-// of a raw Mongoose validation error.
-router.post("/transactions", protect, authorize("admin"), async (req, res) => {
+// POST /api/finance/transactions - General Admin or either Bursar. A
+// slip/receipt upload is required on every entry (slipUrl) — enforced here
+// as well as in the schema, so a request that omits it gets a clear
+// message instead of a raw Mongoose validation error.
+router.post(
+  "/transactions",
+  protect,
+  authorize("admin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
   try {
     if (!req.body.slipUrl) {
       return res.status(400).json({

@@ -94,11 +94,12 @@ async function enrichStudentsBatch(studentDocs) {
   });
 }
 
-// GET /api/students  (principal/admin: all, juniorAdmin: Nursery-JSS only, teacher: own class)
+// GET /api/students  (principal/admin: all, juniorAdmin/juniorBursar:
+// Nursery-JSS only, seniorBursar: SSS only, teacher: own class)
 router.get(
   "/",
   protect,
-  authorize("principal", "teacher", "juniorAdmin"),
+  authorize("principal", "teacher", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const filter = { role: "student" };
     if (req.user.role === "teacher") {
@@ -127,10 +128,15 @@ router.get(
       .populate("classId", "name level classGroup")
       .sort("name");
 
-    // Junior School Admin (Nursery-JSS) can never see SSS students, no
-    // matter what level filter is passed in.
-    if (req.user.role === "juniorAdmin") {
+    // Junior School Admin (Nursery-JSS) and the Junior Bursar can never
+    // see SSS students, no matter what level filter is passed in. The
+    // Senior Bursar is the mirror case — SSS is all they're ever scoped
+    // to, since that's the only fee level they handle.
+    if (req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") {
       students = students.filter((s) => s.classId?.level !== "SSS");
+    }
+    if (req.user.role === "seniorBursar") {
+      students = students.filter((s) => s.classId?.level === "SSS");
     }
     if (req.query.level) {
       students = students.filter((s) => s.classId?.level === req.query.level);
@@ -187,6 +193,7 @@ router.post(
         nationality,
         bloodGroup,
         avatarUrl,
+        house,
       } = req.body;
 
       if (req.user.role === "juniorAdmin" && classId) {
@@ -218,6 +225,7 @@ router.post(
         nationality,
         bloodGroup,
         avatarUrl,
+        house,
         initials,
         color: [
           "#4f8cff",

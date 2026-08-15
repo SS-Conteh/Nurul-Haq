@@ -7,12 +7,39 @@ const UserSchema = new mongoose.Schema(
     password: { type: String, required: true, minlength: 6, select: false },
     role: {
       type: String,
-      // "admin" = General Admin (full access, same as the Principal,
-      // across every level of the school). "juniorAdmin" = Junior School
-      // Admin (same kind of full CRUD access, but scoped to Nursery,
-      // Primary, and JSS only — never SSS).
-      enum: ["principal", "admin", "juniorAdmin", "teacher", "student"],
+      // "admin"       = General Admin — full access, everywhere, across
+      //                 every level of the school. The only role that can
+      //                 add other admin-layer accounts.
+      // "juniorAdmin" = Junior School Admin — same kind of full CRUD
+      //                 access as General Admin, but scoped to Nursery,
+      //                 Primary, and JSS only — never SSS.
+      // "principal"   = An oversight-only account: Senior/Junior
+      //                 Principal, Vice Principal, or Proprietor (see
+      //                 `principalTitle` below for which one). Can view
+      //                 and message everyone, but can never add, edit, or
+      //                 delete anything anywhere in the system.
+      // "seniorBursar"/"juniorBursar" = Finance-only accounts. Senior
+      //                 Bursar handles SSS fees/bank transactions, Junior
+      //                 Bursar handles Nursery–JSS. Nothing outside
+      //                 Finance is visible to either.
+      enum: [
+        "principal",
+        "admin",
+        "juniorAdmin",
+        "seniorBursar",
+        "juniorBursar",
+        "teacher",
+        "student",
+      ],
       required: true,
+    },
+    // Only set (and only meaningful) when role === "principal" — which of
+    // the oversight titles this account holds. Purely a display/badge
+    // distinction; all four carry identical (view-only) permissions.
+    principalTitle: {
+      type: String,
+      enum: ["Senior Principal", "Junior Principal", "Vice Principal", "Proprietor", ""],
+      default: "",
     },
     phone: { type: String, unique: true, sparse: true, trim: true },
     address: { type: String, default: "12 Wilberforce Street, Freetown" },
@@ -27,6 +54,11 @@ const UserSchema = new mongoose.Schema(
     classId: { type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" },
     admissionNo: { type: String, default: "" },
     bloodGroup: { type: String, default: "" },
+    // Free-text house name, picked at enrollment from the house colors set
+    // up in Settings → School Info (e.g. "Red House"). Stored as text
+    // rather than a ref so a house can be renamed/recolored in Settings
+    // without needing a migration.
+    house: { type: String, default: "" },
 
     // Teacher-only fields
     subjects: { type: [String], default: [] },

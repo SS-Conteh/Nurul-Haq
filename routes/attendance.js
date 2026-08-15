@@ -13,6 +13,23 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Every admin-layer account (General Admin, Junior School Admin, Senior/
+// Junior Bursar, and the Senior/Junior Principal & Vice Principal seats)
+// scans in/out for their own attendance, exactly like a teacher — the only
+// exception is the Proprietor, who is purely an overseer and is never
+// tracked this way.
+function isProprietor(user) {
+  return user.role === "principal" && user.principalTitle === "Proprietor";
+}
+const STAFF_ATTENDANCE_ROLES = [
+  "teacher",
+  "admin",
+  "juniorAdmin",
+  "principal",
+  "seniorBursar",
+  "juniorBursar",
+];
+
 function nowLabel() {
   return new Date().toLocaleTimeString("en-US", {
     hour: "2-digit",
@@ -35,7 +52,7 @@ function isLate(cutoff) {
 router.post(
   "/qr/generate",
   protect,
-  authorize("principal"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     const date = todayStr();
     const shifts = ["Morning", "Afternoon"];
@@ -56,7 +73,7 @@ router.post(
 );
 
 // GET /api/attendance/qr/today - fetch (without regenerating) today's codes
-router.get("/qr/today", protect, authorize("principal"), async (req, res) => {
+router.get("/qr/today", protect, authorize("admin", "juniorAdmin", "principal"), async (req, res) => {
   const date = todayStr();
   const docs = await DailyQRCode.find({ date });
   const codes = {};
@@ -64,69 +81,87 @@ router.get("/qr/today", protect, authorize("principal"), async (req, res) => {
   res.json({ date, codes });
 });
 
-// ── Teacher: scan a QR code to clock in / clock out ──
+// ── Any staff member: scan a QR code to clock in / clock out ──
 // POST /api/attendance/qr/scan  { code }
-router.post("/qr/scan", protect, authorize("teacher"), async (req, res) => {
-  try {
-    const { code } = req.body;
-    const qr = await DailyQRCode.findOne({ code });
-    if (!qr || qr.date !== todayStr()) {
+// Every admin-layer role scans exactly like a teacher does — the
+// Proprietor is the sole exception, since they're purely an overseer and
+// isn't tracked at all.
+router.post(
+  "/qr/scan",
+  protect,
+  authorize(...STAFF_ATTENDANCE_ROLES),
+  async (req, res) => {
+    if (isProprietor(req.user)) {
       return res
-        .status(400)
-        .json({ message: "This QR code is invalid or has expired" });
+        .status(403)
+        .json({ message: "The Proprietor's attendance isn't tracked" });
     }
-    const settings = (await Settings.findOne()) || {};
-    const cutoff =
-      qr.shift === "Morning"
-        ? settings.morningShiftStart
-        : settings.afternoonShiftStart;
+    try {
+      const { code } = req.body;
+      const qr = await DailyQRCode.findOne({ code });
+      if (!qr || qr.date !== todayStr()) {
+        return res
+          .status(400)
+          .json({ message: "This QR code is invalid or has expired" });
+      }
+      const settings = (await Settings.findOne()) || {};
+      const cutoff =
+        qr.shift === "Morning"
+          ? settings.morningShiftStart
+          : settings.afternoonShiftStart;
 
-    let record = await TeacherAttendance.findOne({
-      teacher: req.user._id,
-      date: qr.date,
-      shift: qr.shift,
-    });
-
-    if (!record) {
-      record = await TeacherAttendance.create({
+      let record = await TeacherAttendance.findOne({
         teacher: req.user._id,
         date: qr.date,
         shift: qr.shift,
-        timeIn: nowLabel(),
-        lateTag: isLate(cutoff) ? "Late" : "On Time",
-        status: "Active",
       });
-      return res.status(201).json({ record, action: "clock-in" });
+
+      if (!record) {
+        record = await TeacherAttendance.create({
+          teacher: req.user._id,
+          date: qr.date,
+          shift: qr.shift,
+          timeIn: nowLabel(),
+          lateTag: isLate(cutoff) ? "Late" : "On Time",
+          status: "Active",
+        });
+        return res.status(201).json({ record, action: "clock-in" });
+      }
+
+      if (!record.timeOut) {
+        record.timeOut = nowLabel();
+        await record.save();
+        return res.json({ record, action: "clock-out" });
+      }
+
+      return res.json({ record, action: "already-complete" });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
     }
+  },
+);
 
-    if (!record.timeOut) {
-      record.timeOut = nowLabel();
-      await record.save();
-      return res.json({ record, action: "clock-out" });
-    }
-
-    return res.json({ record, action: "already-complete" });
-  } catch (err) {
-    res.status(400).json({ message: err.message });
-  }
-});
-
-// GET /api/attendance/teachers?date=YYYY-MM-DD - principal's Teachers attendance table
-router.get("/teachers", protect, authorize("principal"), async (req, res) => {
+// GET /api/attendance/teachers?date=YYYY-MM-DD - the staff attendance
+// table (teachers AND every admin-layer account that scans in/out).
+// Viewed by the General Admin, Junior School Admin, and the oversight tier
+// (including the Proprietor, who can watch this table even though their
+// own attendance is never tracked).
+router.get("/teachers", protect, authorize("admin", "juniorAdmin", "principal"), async (req, res) => {
   const date = req.query.date || todayStr();
   const records = await TeacherAttendance.find({ date }).populate(
     "teacher",
-    "name initials color phone level teacherRole classTeacherOf",
+    "name initials color phone level teacherRole classTeacherOf role principalTitle",
   );
   res.json({ date, records });
 });
 
-// PUT /api/attendance/teachers/:id - principal manually sets a teacher's
-// status for a shift they didn't scan for (On Leave, Suspended, Sick, Absent)
+// PUT /api/attendance/teachers/:id - Admin/Junior School Admin manually sets
+// a teacher's status for a shift they didn't scan for (On Leave, Suspended,
+// Sick, Absent). The Principal can view this table but never edits it.
 router.put(
   "/teachers/:id",
   protect,
-  authorize("principal"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     const { status } = req.body;
     const allowed = ["Active", "Absent", "On Leave", "Suspended", "Sick"];
@@ -144,14 +179,16 @@ router.put(
   },
 );
 
-// POST /api/attendance/teachers - principal/admin marks a teacher's status
-// for a shift/date the teacher never scanned for at all (e.g. On Leave,
-// Sick), or records a manual sign-in/sign-out time from the attendance
-// cards (timeIn/timeOut are optional — only sent when that toggle applies).
+// POST /api/attendance/teachers - Admin/Junior School Admin marks a
+// teacher's status for a shift/date the teacher never scanned for at all
+// (e.g. On Leave, Sick), or records a manual sign-in/sign-out time from the
+// physical attendance cards for teachers without a phone (timeIn/timeOut
+// are optional — only sent when that toggle applies). The Principal can
+// view this table but never marks attendance.
 router.post(
   "/teachers",
   protect,
-  authorize("principal"),
+  authorize("admin", "juniorAdmin"),
   async (req, res) => {
     const { teacher, date, shift, status, timeIn, timeOut } = req.body;
     const allowed = ["Active", "Absent", "On Leave", "Suspended", "Sick"];
@@ -170,13 +207,14 @@ router.post(
   },
 );
 
-// GET /api/attendance/my - a teacher's OWN QR sign-in/out history (not
-// student attendance). Subject teachers use this; principals can pull any
-// teacher's history via /teachers.
+// GET /api/attendance/my - the signed-in staff member's OWN QR sign-in/out
+// history (not student attendance). Every scanning role uses this — the
+// admin-layer "Overview" screens pull any staff member's history via
+// /teachers instead.
 router.get(
   "/my",
   protect,
-  authorize("teacher", "principal"),
+  authorize(...STAFF_ATTENDANCE_ROLES),
   async (req, res) => {
     const records = await TeacherAttendance.find({
       teacher: req.user._id,
@@ -226,11 +264,12 @@ router.get("/summary/:studentId", protect, async (req, res) => {
   });
 });
 
-// POST /api/attendance/bulk - teacher marks a whole class for a date
+// POST /api/attendance/bulk - teacher marks a whole class for a date. The
+// Principal can view attendance but never marks it.
 router.post(
   "/bulk",
   protect,
-  authorize("teacher", "principal"),
+  authorize("teacher", "admin", "juniorAdmin"),
   async (req, res) => {
     try {
       const { classId, date, records } = req.body; // records: [{student, status}]
@@ -267,7 +306,7 @@ router.post(
 router.put(
   "/:id",
   protect,
-  authorize("teacher", "principal"),
+  authorize("teacher", "admin", "juniorAdmin"),
   async (req, res) => {
     const record = await Attendance.findByIdAndUpdate(req.params.id, req.body, {
       new: true,

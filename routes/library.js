@@ -18,7 +18,7 @@ router.get("/borrowers", protect, authorize("principal", "teacher"), async (req,
   res.json({ borrowers });
 });
 
-router.post("/", protect, authorize("principal"), async (req, res) => {
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const book = await Book.create(req.body);
   res.status(201).json({ book });
 });
@@ -57,7 +57,7 @@ router.post("/:id/return", protect, async (req, res) => {
   res.json({ book });
 });
 
-router.put("/:id", protect, authorize("principal"), async (req, res) => {
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const book = await Book.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
   });
@@ -65,7 +65,7 @@ router.put("/:id", protect, authorize("principal"), async (req, res) => {
   res.json({ book });
 });
 
-router.delete("/:id", protect, authorize("principal"), async (req, res) => {
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const book = await Book.findByIdAndDelete(req.params.id);
   if (!book) return res.status(404).json({ message: "Book not found" });
   res.json({ message: "Book removed" });

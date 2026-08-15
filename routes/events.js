@@ -8,12 +8,12 @@ router.get("/", protect, async (req, res) => {
   res.json({ events });
 });
 
-router.post("/", protect, authorize("principal"), async (req, res) => {
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const event = await Event.create({ ...req.body, createdBy: req.user._id });
   res.status(201).json({ event });
 });
 
-router.put("/:id", protect, authorize("principal"), async (req, res) => {
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const event = await Event.findByIdAndUpdate(req.params.id, req.body, {
     new: true,
   });
@@ -21,12 +21,12 @@ router.put("/:id", protect, authorize("principal"), async (req, res) => {
   res.json({ event });
 });
 
-router.delete("/", protect, authorize("principal"), async (req, res) => {
+router.delete("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   await Event.deleteMany({});
   res.json({ message: "All events cleared" });
 });
 
-router.delete("/:id", protect, authorize("principal"), async (req, res) => {
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const event = await Event.findByIdAndDelete(req.params.id);
   if (!event) return res.status(404).json({ message: "Event not found" });
   res.json({ message: "Event removed" });

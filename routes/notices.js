@@ -20,7 +20,7 @@ router.get("/", protect, async (req, res) => {
   res.json({ notices });
 });
 
-router.post("/", protect, authorize("principal"), async (req, res) => {
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const { category } = req.body;
   if (!["teachers", "students"].includes(category)) {
     return res
@@ -31,7 +31,7 @@ router.post("/", protect, authorize("principal"), async (req, res) => {
   res.status(201).json({ notice });
 });
 
-router.put("/:id", protect, authorize("principal"), async (req, res) => {
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   if (
     req.body.category !== undefined &&
     !["teachers", "students"].includes(req.body.category)
@@ -48,7 +48,7 @@ router.put("/:id", protect, authorize("principal"), async (req, res) => {
 });
 
 // DELETE /api/notices - principal only: removes every notice for everyone
-router.delete("/", protect, authorize("principal"), async (req, res) => {
+router.delete("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   await Notice.deleteMany({});
   res.json({ message: "All notices cleared" });
 });
@@ -64,7 +64,7 @@ router.post("/clear-mine", protect, async (req, res) => {
 });
 
 // DELETE /api/notices/:id - principal only: removes this notice for everyone
-router.delete("/:id", protect, authorize("principal"), async (req, res) => {
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const notice = await Notice.findByIdAndDelete(req.params.id);
   if (!notice) return res.status(404).json({ message: "Notice not found" });
   res.json({ message: "Notice removed" });
