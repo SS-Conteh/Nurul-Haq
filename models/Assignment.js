@@ -23,6 +23,11 @@ const AssignmentSchema = new mongoose.Schema(
     documentUrl: { type: String, default: "" },
     documentName: { type: String, default: "" },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // Same purpose as Grade.academicYear — set once at creation from
+    // Settings.academicYear, never changed after. Lets a new academic
+    // year start with a clean assignments list without deleting last
+    // year's — see utils/academicYear.js.
+    academicYear: { type: String, default: "" },
     submissions: [
       {
         student: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

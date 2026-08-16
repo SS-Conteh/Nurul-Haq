@@ -9,6 +9,9 @@ const ExamSchema = new mongoose.Schema(
     date: { type: String, required: true },
     duration: { type: String, default: "2 hrs" },
     venue: { type: String, default: "Main Hall" },
+    // Same purpose as Grade.academicYear — set once at creation from
+    // Settings.academicYear — see utils/academicYear.js.
+    academicYear: { type: String, default: "" },
     status: {
       type: String,
       enum: ["Upcoming", "Scheduled", "Ongoing", "Completed"],

@@ -44,6 +44,16 @@ router.get("/", protect, async (req, res) => {
 // changing. Opening/bank balance, Teachers, Admins, Library, Settings
 // itself, and Classes are completely unaffected by a year change — they
 // were never year-scoped to begin with.
+// Builds the exact term string a grade/exam under the given settings would
+// carry — see the identical helper in routes/grades.js. Duplicated rather
+// than imported to keep this route free of a grades.js dependency; the two
+// are kept in lockstep by comment, not by import.
+function termStringFor(settings) {
+  if (!settings?.currentTerm || !settings?.academicYear) return null;
+  const yearPart = settings.academicYear.split("/")[1] || settings.academicYear;
+  return `${settings.currentTerm} · ${yearPart}`;
+}
+
 router.put("/", protect, authorize("admin"), async (req, res) => {
   let settings = await Settings.findOne();
   if (!settings) settings = new Settings();
@@ -68,6 +78,16 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
     // Fresh start — force the term back to unset, even if the request body
     // tried to carry the old term over.
     settings.currentTerm = "";
+  }
+
+  // Whenever the resulting currentTerm+academicYear settle on a real term
+  // string, record it in termHistory (a plain add-if-missing — never
+  // removed, same append-only pattern as academicYearHistory above) so the
+  // Term dropdown on Grades keeps offering every term the school has ever
+  // graded under, including this one, forever.
+  const newTermString = termStringFor(settings);
+  if (newTermString && !(settings.termHistory || []).includes(newTermString)) {
+    settings.termHistory = [...(settings.termHistory || []), newTermString];
   }
 
   await settings.save();

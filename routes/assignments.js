@@ -1,10 +1,13 @@
 const express = require("express");
 const Assignment = require("../models/Assignment");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.user.role === "teacher") {
     // Teachers only ever see assignments THEY created, optionally narrowed
     // down further to one of the classes they teach.
@@ -31,9 +34,11 @@ router.post(
     if (req.user.role === "teacher" && !body.subject) {
       body.subject = (req.user.subjects || [])[0] || "";
     }
+    const settings = await Settings.findOne();
     const assignment = await Assignment.create({
       ...body,
       teacher: req.user._id,
+      academicYear: settings?.academicYear || "",
     });
     await assignment.populate("classId", "name");
     res.status(201).json({ assignment });

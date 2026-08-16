@@ -1,10 +1,13 @@
 const express = require("express");
 const Timetable = require("../models/Timetable");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.classId) filter.classId = req.query.classId;
   const entries = await Timetable.find(filter)
     .populate("teacher", "name")
@@ -13,7 +16,11 @@ router.get("/", protect, async (req, res) => {
 });
 
 router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
-  const entry = await Timetable.create(req.body);
+  const settings = await Settings.findOne();
+  const entry = await Timetable.create({
+    ...req.body,
+    academicYear: settings?.academicYear || "",
+  });
   res.status(201).json({ entry });
 });
 
@@ -27,9 +34,14 @@ router.post("/bulk", protect, authorize("admin", "juniorAdmin"), async (req, res
   try {
     const { classId, entries } = req.body;
     if (!classId) return res.status(400).json({ message: "classId is required" });
-    await Timetable.deleteMany({ classId });
+    const settings = await Settings.findOne();
+    const academicYear = settings?.academicYear || "";
+    // Only replace THIS class's entries for the CURRENT academic year —
+    // a past year's timetable (still tagged with its own academicYear, or
+    // "" if it predates this field) is never touched by a bulk re-set.
+    await Timetable.deleteMany({ classId, academicYear });
     const created = await Timetable.insertMany(
-      (entries || []).map((e) => ({ ...e, classId })),
+      (entries || []).map((e) => ({ ...e, classId, academicYear })),
     );
     res.status(201).json({ entries: created });
   } catch (err) {

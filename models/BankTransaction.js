@@ -26,6 +26,15 @@ const BankTransactionSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    // Which academic year this transaction was recorded under — set once
+    // at creation from Settings.academicYear, never changed after. The
+    // transaction itself is NEVER deleted or hidden when a new academic
+    // year starts (real money moved, and the running balance must stay
+    // continuous across years) — this field exists only so the "Total
+    // Deposits" / "Total Withdrawals" SUMMARY figures (routes/bank.js
+    // GET /summary) can reset to the new year's activity while every row
+    // in the ledger, and the actual balance, stay exactly as they were.
+    academicYear: { type: String, default: "" },
   },
   { timestamps: true },
 );

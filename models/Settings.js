@@ -35,6 +35,17 @@ const SettingsSchema = new mongoose.Schema(
     // that reads this (grade entry, dashboards, report cards, promotion)
     // treats "" as "no term set yet" and blocks/labels accordingly.
     currentTerm: { type: String, default: "" },
+    // Every full "Term X · YYYY" string the school has ever operated
+    // under, oldest first — this is what powers the Term dropdown on the
+    // Grades page (and anywhere else a term needs picking) for every
+    // role, the same way academicYearHistory powers the academic-year
+    // dropdown. Appended to (never removed from) in routes/settings.js
+    // whenever currentTerm/academicYear resolve to a term string that
+    // isn't already on file. Nothing is ever deleted or moved when a new
+    // term is set — a past term's grades simply stay tagged with the term
+    // string they were entered under and become visible again the moment
+    // that term is picked from the dropdown.
+    termHistory: { type: [String], default: [] },
     // Used on the report card header — set these from Settings each term.
     termBegins: { type: String, default: "" },
     termEnd: { type: String, default: "" },

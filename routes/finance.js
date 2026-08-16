@@ -347,6 +347,10 @@ router.put(
 // School Admin (view), and both Bursars (the bank ledger isn't
 // level-split, so either bursar can see and record the whole school's
 // deposits/withdrawals).
+// The ledger itself is NEVER year-scoped — every transaction ever
+// recorded, from every academic year, stays visible and in the database
+// permanently (real money moved; nothing about it is ever reset or
+// deleted). Only the SUMMARY totals below reset per academic year.
 router.get(
   "/transactions",
   protect,
@@ -362,27 +366,37 @@ router.get(
 // opening balance (and who/when set it, once it has been) so the ledger's
 // running balance always includes whatever was in the account before this
 // system started tracking it.
+//
+// `deposits` / `withdrawals` are scoped to the CURRENT academic year (or
+// the one requested via ?ay=) — these are what "reset" the moment a new
+// academic year is set, per the General Admin's requirement: nothing in
+// the bank ledger is ever deleted, but the "Total Deposits" / "Total
+// Withdrawals" cards on the finance dashboard should start again from
+// zero for the new year. `balance`, by contrast, is real money and is
+// deliberately computed from the OPENING balance + every transaction ever
+// recorded (all academic years) — a bank balance can never "reset" itself,
+// only the on-screen yearly totals do.
 router.get(
   "/transactions/summary",
   protect,
   authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
-    const [transactions, settings] = await Promise.all([
+    const settings = await Settings.findOne();
+    const [allTransactions, yearTransactions] = await Promise.all([
       BankTransaction.find(),
-      Settings.findOne(),
+      BankTransaction.find(yearFilter(settings?.academicYear, req.query.ay)),
     ]);
     const openingBalance = settings?.bankOpeningBalance ?? null;
-    const deposits = transactions
-      .filter((t) => t.type === "Deposit")
-      .reduce((s, t) => s + t.amount, 0);
-    const withdrawals = transactions
-      .filter((t) => t.type === "Withdrawal")
-      .reduce((s, t) => s + t.amount, 0);
+    const sumByType = (list, type) =>
+      list.filter((t) => t.type === type).reduce((s, t) => s + t.amount, 0);
+    const allDeposits = sumByType(allTransactions, "Deposit");
+    const allWithdrawals = sumByType(allTransactions, "Withdrawal");
     res.json({
-      deposits,
-      withdrawals,
-      balance: (openingBalance || 0) + deposits - withdrawals,
-      count: transactions.length,
+      deposits: sumByType(yearTransactions, "Deposit"),
+      withdrawals: sumByType(yearTransactions, "Withdrawal"),
+      count: yearTransactions.length,
+      // Real, all-time running balance — never scoped to a single year.
+      balance: (openingBalance || 0) + allDeposits - allWithdrawals,
       openingBalance,
       openingBalanceSetAt: settings?.bankOpeningBalanceSetAt || null,
       openingBalanceSetBy: settings?.bankOpeningBalanceSetBy || "",

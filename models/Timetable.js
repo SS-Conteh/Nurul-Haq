@@ -35,6 +35,12 @@ const TimetableSchema = new mongoose.Schema(
     },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     room: { type: String, default: "" },
+    // Same purpose as Grade.academicYear — set once at creation from
+    // Settings.academicYear. A new academic year starts with a blank
+    // timetable to set (bell schedules/teacher assignments commonly
+    // change year to year) without deleting the old one — see
+    // utils/academicYear.js.
+    academicYear: { type: String, default: "" },
   },
   { timestamps: true },
 );

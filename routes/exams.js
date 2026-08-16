@@ -1,17 +1,24 @@
 const express = require("express");
 const Exam = require("../models/Exam");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.term) filter.term = req.query.term;
   const exams = await Exam.find(filter).sort("date");
   res.json({ exams });
 });
 
 router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
-  const exam = await Exam.create(req.body);
+  const settings = await Settings.findOne();
+  const exam = await Exam.create({
+    ...req.body,
+    academicYear: settings?.academicYear || "",
+  });
   res.status(201).json({ exam });
 });
 
