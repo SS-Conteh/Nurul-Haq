@@ -7,6 +7,17 @@ const { yearFilter } = require("../utils/academicYear");
 
 const router = express.Router();
 
+// Builds the exact term string a NEW grade must carry, straight off
+// whatever's currently set in Settings — e.g. currentTerm "Term 2" +
+// academicYear "2025/2026" -> "Term 2 · 2026". Returns null if either
+// piece hasn't been set yet, which callers treat as "grading is locked
+// until an Admin sets the current term".
+function expectedCurrentTermString(settings) {
+  if (!settings?.currentTerm || !settings?.academicYear) return null;
+  const yearPart = settings.academicYear.split("/")[1] || settings.academicYear;
+  return `${settings.currentTerm} · ${yearPart}`;
+}
+
 // GET /api/grades?studentId=&classId=&term=&subject=&ay=
 router.get("/", protect, async (req, res) => {
   const settings = await Settings.findOne();
@@ -100,6 +111,25 @@ router.post(
         return res
           .status(403)
           .json({ message: "You can only submit grades for your own subject(s)" });
+      }
+      // A teacher may only ever grade the term the school is CURRENTLY on —
+      // never a term of their own choosing. This is what makes the term set
+      // in Settings actually govern the whole system: an Admin/Junior Admin
+      // may still backfill/correct a past term's grade, but a teacher's
+      // first-time submission is always pinned to Settings.currentTerm.
+      if (req.user.role === "teacher") {
+        const settingsForTerm = await Settings.findOne();
+        const expectedTerm = expectedCurrentTermString(settingsForTerm);
+        if (!expectedTerm) {
+          return res.status(400).json({
+            message: "The current term hasn't been set yet — ask an Admin to set it in Settings before grades can be entered.",
+          });
+        }
+        if (term !== expectedTerm) {
+          return res.status(400).json({
+            message: `Grades can only be submitted for the current term (${expectedTerm}).`,
+          });
+        }
       }
       let grade = await Grade.findOne({ student, subject, term });
       if (grade) {

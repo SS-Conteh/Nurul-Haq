@@ -34,12 +34,16 @@ router.get(
       }
 
       const settings = (await Settings.findOne()) || {};
-      const termNum = Number(req.query.term) || 3;
+      // Default to whatever term the school is actually on right now
+      // (Settings.currentTerm), not a hardcoded guess — falls back to 3
+      // only if no term has been set at all, so the title still renders.
+      const currentTermNum = Number((settings.currentTerm || "").replace(/\D/g, "")) || 3;
+      const termNum = Number(req.query.term) || currentTermNum;
       const year =
         req.query.year ||
-        (settings.academicYear || "2025/2026").split("/")[1] ||
-        "2026";
-      const session = req.query.session || settings.academicYear || "2025/2026";
+        (settings.academicYear || "").split("/")[1] ||
+        String(new Date().getFullYear());
+      const session = req.query.session || settings.academicYear || "";
       const terms = [1, 2, 3].map((n) => `Term ${n} · ${year}`);
       const termLabel = TERM_LABELS[termNum] || "THIRD TERM";
 
@@ -145,12 +149,13 @@ router.get(
       }
 
       const settings = (await Settings.findOne()) || {};
-      const termNum = Number(req.query.term) || 3;
+      const currentTermNum = Number((settings.currentTerm || "").replace(/\D/g, "")) || 3;
+      const termNum = Number(req.query.term) || currentTermNum;
       const year =
         req.query.year ||
-        (settings.academicYear || "2025/2026").split("/")[1] ||
-        "2026";
-      const session = req.query.session || settings.academicYear || "2025/2026";
+        (settings.academicYear || "").split("/")[1] ||
+        String(new Date().getFullYear());
+      const session = req.query.session || settings.academicYear || "";
       const terms = [1, 2, 3].map((n) => `Term ${n} · ${year}`);
       const termLabel = TERM_LABELS[termNum] || "THIRD TERM";
 

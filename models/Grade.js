@@ -8,7 +8,11 @@ const GradeSchema = new mongoose.Schema(
       required: true,
     },
     subject: { type: String, required: true },
-    term: { type: String, required: true, default: "Term 2 · 2026" },
+    // No default — a grade must always be explicitly tagged with whatever
+    // term is currently set in Settings (see routes/grades.js). A stray
+    // default here was previously masking grades getting silently mis-tagged
+    // whenever the term dropdown wasn't wired up correctly on the frontend.
+    term: { type: String, required: true },
     // Which academic year this grade belongs to (e.g. "2025/2026") — set
     // once at creation from Settings.academicYear, never changed after.
     // This is what lets the academic-year dropdown show a past year's

@@ -30,7 +30,11 @@ const SettingsSchema = new mongoose.Schema(
     // from it; picking an older year from the dropdown just filters
     // existing records down to that year instead of showing "current".
     academicYearHistory: { type: [String], default: ["2025/2026"] },
-    currentTerm: { type: String, default: "Term 2" },
+    // No default on purpose — the system must never assume a term. The
+    // General Admin has to explicitly pick one in Settings; every place
+    // that reads this (grade entry, dashboards, report cards, promotion)
+    // treats "" as "no term set yet" and blocks/labels accordingly.
+    currentTerm: { type: String, default: "" },
     // Used on the report card header — set these from Settings each term.
     termBegins: { type: String, default: "" },
     termEnd: { type: String, default: "" },

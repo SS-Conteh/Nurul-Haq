@@ -119,22 +119,29 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     return null;
   }
 
-  // Yearly per-subject mean across all classmates, for the YEARLY rank column
+  // Whether TERM 3 has actually been graded for this subject/student —
+  // the yearly figures for a subject only exist once this is true. Term 1
+  // or term 1+2 alone can never produce a yearly total/mean/rank/grade;
+  // only term 1, 2, AND 3 together do.
+  function hasTerm3(studentId, subject) {
+    return !!gradesFor(studentId, subject)[2];
+  }
+
+  // Yearly per-subject figures for the YEARLY columns — gated on Term 3.
+  // TOTAL = the sum total of the subject's three term MNs (no division).
+  // MEAN  = that same sum, divided by 3 (the fixed 1st+2nd+3rd/3 formula —
+  // not divided by however many terms happen to have a grade, since a
+  // yearly figure only exists at all once all three are in).
   function yearlyStatsFor(studentId, subject) {
+    if (!hasTerm3(studentId, subject)) return { total: 0, mean: 0 };
     const rows = gradesFor(studentId, subject);
-    let total = 0, termCount = 0;
-    rows.forEach((g) => {
-      if (g) { total += ((g.test || 0) + (g.examScore || 0)) / 2; termCount += 1; }
-    });
-    // mean = the average of this subject's per-term totals (each already a
-    // 0-100 percentage), NOT total/termCount*2 — that used to silently
-    // halve every mean (e.g. a 75% average was scored as if it were 37.5%,
-    // which is well below FAIL) and misassign the letter grade as a result.
-    const mean = termCount ? total / termCount : 0;
-    return { total, mean, termCount };
+    const total = rows.reduce((s, g) => s + (g ? ((g.test || 0) + (g.examScore || 0)) / 2 : 0), 0);
+    const mean = total / 3;
+    return { total, mean };
   }
   function yearlyRank(subject, studentId) {
-    const ids = [...new Set(allGrades.filter((g) => g.subject === subject).map((g) => String(g.student)))];
+    const ids = [...new Set(allGrades.filter((g) => g.subject === subject).map((g) => String(g.student)))]
+      .filter((sid) => hasTerm3(sid, subject));
     const withMean = ids.map((sid) => [sid, yearlyStatsFor(sid, subject).mean]);
     if (!withMean.length) return null;
     const sorted = withMean.sort((a, b) => b[1] - a[1]);
@@ -158,17 +165,18 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       const rnk = termRank(subject, idx, student._id);
       return { test: g.test ?? "", exam: g.examScore ?? "", mn: mn.toFixed(1), rnk: rnk ? ordinal(rnk) : "-" };
     };
+    const subjectHasTerm3 = hasTerm3(student._id, subject);
     const { total, mean } = yearlyStatsFor(student._id, subject);
-    const rnkY = yearlyRank(subject, student._id);
-    const { grade, remark } = gradeFor(mean);
+    const rnkY = subjectHasTerm3 ? yearlyRank(subject, student._id) : null;
+    const { grade, remark } = subjectHasTerm3 ? gradeFor(mean) : { grade: "-", remark: "-" };
     return {
       subject,
       max: 100,
       t1: termCell(t1, 0),
       t2: termCell(t2, 1),
       t3: termCell(t3, 2),
-      total: total.toFixed(1).replace(/\.0$/, ""),
-      mean: mean.toFixed(1),
+      total: subjectHasTerm3 ? total.toFixed(1).replace(/\.0$/, "") : "-",
+      mean: subjectHasTerm3 ? mean.toFixed(1) : "-",
       rank: rnkY ? ordinal(rnkY) : "-",
       grade,
       remark,
@@ -196,6 +204,26 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     colTotals.t3b += Number(r.t3.exam) || 0;
   });
   const avgPct = obtainable ? (obtained / obtainable) * 100 : 0;
+
+  // ── YEARLY footer row figures (TOTAL MARKS / PERCENTAGE) ──
+  // Per-term column value = the SUM of every subject's MN for that term —
+  // never divided. Only the PERCENTAGE row divides (sum / number of
+  // subjects). The YEARLY columns only exist once Term 3 has actually been
+  // graded for this student — term 1, or term 1+2, alone can never produce
+  // a yearly total/percentage.
+  const footerSubjCount = subjects.length || 1;
+  const term1Total = (colTotals.t1a + colTotals.t1b) / 2;
+  const term2Total = (colTotals.t2a + colTotals.t2b) / 2;
+  const term3Total = (colTotals.t3a + colTotals.t3b) / 2;
+  const term1Pct = term1Total / footerSubjCount;
+  const term2Pct = term2Total / footerSubjCount;
+  const term3Pct = term3Total / footerSubjCount;
+  const studentHasTerm3 = rows.some((r) => r.t3.test !== "" || r.t3.exam !== "");
+  // YEARLY TOTAL MARKS = 1st term total + 2nd term total + 3rd term total —
+  // straight sum, no division.
+  const yearlyTotalMarks = studentHasTerm3 ? term1Total + term2Total + term3Total : null;
+  // YEARLY PERCENTAGE = (1st term % + 2nd term % + 3rd term %) / 3.
+  const yearlyPercentage = studentHasTerm3 ? (term1Pct + term2Pct + term3Pct) / 3 : null;
 
   // Overall class position, ranked by each classmate's own average percentage
   const classmateAverages = new Map();
@@ -510,43 +538,45 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     ty += ROW_H;
   });
 
-  // TOTAL MARKS row — lavender-tinted summary band
+  // TOTAL MARKS row — lavender-tinted summary band. Per-term MN cell is the
+  // straight SUM of every subject's MN for that term (never divided). The
+  // YEARLY cell is term1 total + term2 total + term3 total, no division —
+  // and only shows once Term 3 has actually been graded for this student.
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "MEAN TOTAL MARKS", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "TOTAL MARKS", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
-    const subjCount = subjects.length || 1;
     [
-      [colTotals.t1a, colTotals.t1b, (colTotals.t1a + colTotals.t1b) / (2 * subjCount)],
-      [colTotals.t2a, colTotals.t2b, (colTotals.t2a + colTotals.t2b) / (2 * subjCount)],
-      [colTotals.t3a, colTotals.t3b, (colTotals.t3a + colTotals.t3b) / (2 * subjCount)],
-    ].forEach(([a, b, mn]) => {
+      [colTotals.t1a, colTotals.t1b, term1Total],
+      [colTotals.t2a, colTotals.t2b, term2Total],
+      [colTotals.t3a, colTotals.t3b, term3Total],
+    ].forEach(([a, b, tot]) => {
       cellRect(doc, x, ty, TERM_SUBCOLS[0], ROW_H, a || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a ? scoreColor(a) : BLACK }); x += TERM_SUBCOLS[0];
       cellRect(doc, x, ty, TERM_SUBCOLS[1], ROW_H, b || "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: b ? scoreColor(b) : BLACK }); x += TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, mn ? mn.toFixed(1) : "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(mn) : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, tot ? tot.toFixed(1) : "", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(tot) : BLACK }); x += TERM_SUBCOLS[2];
       cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, obtained.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: scoreColor(obtained) }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, yearlyTotalMarks !== null ? yearlyTotalMarks.toFixed(1) : "-", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: yearlyTotalMarks !== null ? scoreColor(yearlyTotalMarks) : BLACK }); x += YEARLY_SUBCOLS[0];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
   }
-  // PERCENTAGE row
+  // PERCENTAGE row — per-term MN cell is the sum of subject MNs DIVIDED by
+  // the number of subjects. YEARLY cell is (1st % + 2nd % + 3rd %) / 3,
+  // again only once Term 3 has actually been graded for this student.
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "MEAN PERCENTAGE", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "PERCENTAGE", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
-    const subjCount = subjects.length || 1;
-    const pctOf = (a, b) => (a + b ? ((a + b) / (2 * subjCount)).toFixed(1) : "0.0");
     [
-      [colTotals.t1a, colTotals.t1b],
-      [colTotals.t2a, colTotals.t2b],
-      [colTotals.t3a, colTotals.t3b],
-    ].forEach(([a, b]) => {
+      [colTotals.t1a, colTotals.t1b, term1Pct],
+      [colTotals.t2a, colTotals.t2b, term2Pct],
+      [colTotals.t3a, colTotals.t3b, term3Pct],
+    ].forEach(([a, b, pct]) => {
       cellRect(doc, x, ty, TERM_SUBCOLS[0] + TERM_SUBCOLS[1], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[0] + TERM_SUBCOLS[1];
-      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, pctOf(a, b), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(pctOf(a, b)) : BLACK }); x += TERM_SUBCOLS[2];
+      cellRect(doc, x, ty, TERM_SUBCOLS[2], ROW_H, a + b ? pct.toFixed(1) : "0.0", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: a + b ? scoreColor(pct) : BLACK }); x += TERM_SUBCOLS[2];
       cellRect(doc, x, ty, TERM_SUBCOLS[3], ROW_H, "", { fill: LAVENDER }); x += TERM_SUBCOLS[3];
     });
-    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, avgPct.toFixed(1), { bold: true, size: CELL_SIZE, fill: LAVENDER, color: obtainable ? scoreColor(avgPct) : BLACK }); x += YEARLY_SUBCOLS[0];
+    cellRect(doc, x, ty, YEARLY_SUBCOLS[0], ROW_H, yearlyPercentage !== null ? yearlyPercentage.toFixed(1) : "-", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: yearlyPercentage !== null ? scoreColor(yearlyPercentage) : BLACK }); x += YEARLY_SUBCOLS[0];
     cellRect(doc, x, ty, YEARLY_SUBCOLS[1] + YEARLY_SUBCOLS[2] + YEARLY_SUBCOLS[3] + YEARLY_SUBCOLS[4], ROW_H, "", { fill: LAVENDER });
     ty += ROW_H;
   }

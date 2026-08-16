@@ -1,7 +1,6 @@
 const express = require("express");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
-const { computePromotions } = require("../utils/promotion");
 const router = express.Router();
 
 // GET /api/settings/public - no login required. Powers the public landing
@@ -32,14 +31,19 @@ router.get("/", protect, async (req, res) => {
 // year it was created under (see each model's `academicYear` field), so a
 // past year's records simply stay exactly where they are and become
 // visible again the moment that year is picked from the academic-year
-// dropdown. What DOES happen on a genuine year change is the one-time
-// auto-promotion pass (see utils/promotion.js): every student's yearly
-// mean from the year that just ended decides whether they're auto-
-// promoted, held for Admin approval, or repeat — this is the "reset" the
-// school actually wants (a fresh, empty-looking system to start entering
-// the new year's records into), not a data wipe. Opening/bank balance,
-// Teachers, Admins, Library, Settings itself, and Classes are completely
-// unaffected — they were never year-scoped to begin with.
+// dropdown.
+//
+// A genuine year change IS a fresh start for the current-term concept
+// specifically: currentTerm is forced back to "" (unset) no matter what the
+// request body says, so the school can never accidentally roll into a new
+// academic year still "on" the old year's Term 3. The General Admin has to
+// come back and explicitly pick Term 1 for the new year before anyone can
+// enter grades again (see routes/grades.js). Auto-promotion is NOT run
+// here — that's a separate, explicit action (see routes/promotions.js
+// POST /compute) tied to Term 3 grades being in, not to the calendar year
+// changing. Opening/bank balance, Teachers, Admins, Library, Settings
+// itself, and Classes are completely unaffected by a year change — they
+// were never year-scoped to begin with.
 router.put("/", protect, authorize("admin"), async (req, res) => {
   let settings = await Settings.findOne();
   if (!settings) settings = new Settings();
@@ -52,7 +56,6 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
       ...req.body.preferences,
     };
 
-  let promotionResults = null;
   const isNewYear =
     req.body.academicYear &&
     req.body.academicYear !== previousYear &&
@@ -62,15 +65,14 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
     history.add(previousYear);
     history.add(settings.academicYear);
     settings.academicYearHistory = [...history];
+    // Fresh start — force the term back to unset, even if the request body
+    // tried to carry the old term over.
+    settings.currentTerm = "";
   }
 
   await settings.save();
 
-  if (isNewYear) {
-    promotionResults = await computePromotions(previousYear);
-  }
-
-  res.json({ settings, promotionResults });
+  res.json({ settings, isNewYear: !!isNewYear });
 });
 
 module.exports = router;

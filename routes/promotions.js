@@ -1,9 +1,31 @@
 const express = require("express");
 const Promotion = require("../models/Promotion");
 const User = require("../models/User");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
-const { resolveNextClass } = require("../utils/promotion");
+const { resolveNextClass, computePromotions } = require("../utils/promotion");
 const router = express.Router();
+
+// POST /api/promotions/compute - General Admin only. Explicitly runs
+// end-of-year auto-promotion for the CURRENT academic year, using each
+// student's Term 3 grades. This is NOT tied to changing the academic year
+// (see routes/settings.js) — it only requires that Settings.currentTerm is
+// "Term 3", so the school can run it as soon as Term 3 grading is done,
+// while still sitting in the same academic year. Safe to re-run: students
+// already decided for this year are skipped (see utils/promotion.js).
+router.post("/compute", protect, authorize("admin"), async (req, res) => {
+  const settings = await Settings.findOne();
+  if (!settings?.academicYear) {
+    return res.status(400).json({ message: "Set the academic year in Settings first" });
+  }
+  if (settings.currentTerm !== "Term 3") {
+    return res.status(400).json({
+      message: "Promotions can only be computed once the current term is set to Term 3",
+    });
+  }
+  const results = await computePromotions(settings.academicYear);
+  res.json({ results, academicYear: settings.academicYear });
+});
 
 const populate = [
   { path: "student", select: "name initials color avatarUrl admissionNo classId" },
