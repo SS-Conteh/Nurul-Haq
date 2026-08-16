@@ -9,6 +9,12 @@ const GradeSchema = new mongoose.Schema(
     },
     subject: { type: String, required: true },
     term: { type: String, required: true, default: "Term 2 · 2026" },
+    // Which academic year this grade belongs to (e.g. "2025/2026") — set
+    // once at creation from Settings.academicYear, never changed after.
+    // This is what lets the academic-year dropdown show a past year's
+    // grades/report cards without touching a single record: nothing is
+    // ever deleted or moved, a query just filters on this field.
+    academicYear: { type: String, default: "" },
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
 
     // ── What the teacher actually enters — each an ACTUAL score out of 100 ──

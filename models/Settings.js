@@ -24,6 +24,12 @@ const SettingsSchema = new mongoose.Schema(
       ],
     },
     academicYear: { type: String, default: "2025/2026" },
+    // Every academic year the system has ever operated under, oldest
+    // first, including the current one — this is what powers the academic
+    // year dropdown in the nav for every role. Nothing is ever removed
+    // from it; picking an older year from the dropdown just filters
+    // existing records down to that year instead of showing "current".
+    academicYearHistory: { type: [String], default: ["2025/2026"] },
     currentTerm: { type: String, default: "Term 2" },
     // Used on the report card header — set these from Settings each term.
     termBegins: { type: String, default: "" },

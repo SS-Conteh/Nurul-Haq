@@ -7,6 +7,8 @@ const EventSchema = new mongoose.Schema(
     icon: { type: String, default: "📅" },
     description: { type: String, default: "" },
     audience: { type: String, default: "Entire school" },
+    // Same purpose as Grade.academicYear — set once at creation.
+    academicYear: { type: String, default: "" },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },

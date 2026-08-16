@@ -9,6 +9,10 @@ const AttendanceSchema = new mongoose.Schema(
     },
     classId: { type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" },
     date: { type: Date, required: true, default: Date.now },
+    // Same purpose as Grade.academicYear — set once at creation, lets the
+    // academic-year dropdown show a past year's attendance register
+    // without archiving/deleting anything.
+    academicYear: { type: String, default: "" },
     status: {
       type: String,
       enum: ["Present", "Absent", "Late"],

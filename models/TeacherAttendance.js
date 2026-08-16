@@ -4,6 +4,8 @@ const TeacherAttendanceSchema = new mongoose.Schema(
   {
     teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     date: { type: Date, required: true },
+    // Same purpose as Grade.academicYear — set once at creation.
+    academicYear: { type: String, default: "" },
     shift: { type: String, enum: ["Morning", "Afternoon"], required: true },
     timeIn: { type: String, default: "" }, // e.g. "07:52 AM"
     lateTag: { type: String, enum: ["Late", "On Time", ""], default: "" },

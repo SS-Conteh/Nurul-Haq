@@ -5,6 +5,7 @@ const User = require("../models/User");
 const SchoolClass = require("../models/SchoolClass");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -59,7 +60,8 @@ async function computeFeeStatus(studentId, amount, excludeFeeId = null) {
 // as before) since class teachers are often asked about a student's fee
 // status.
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.studentId) filter.student = req.query.studentId;
   if (req.query.term) filter.term = req.query.term;
   if (req.user.role === "student") filter.student = req.user._id;
@@ -100,7 +102,8 @@ router.get(
   authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const settings = await Settings.findOne();
-    let fees = await Fee.find({ academicYear: settings?.academicYear || "" }).populate({
+    const academicYear = req.query.ay || settings?.academicYear || "";
+    let fees = await Fee.find({ academicYear }).populate({
       path: "student",
       select: "classId",
       populate: { path: "classId", select: "level" },
@@ -189,7 +192,7 @@ router.get(
     const studentIds = students.map((s) => s._id);
 
     const settings = await Settings.findOne();
-    const academicYear = settings?.academicYear || "";
+    const academicYear = req.query.ay || settings?.academicYear || "";
     const requiredFee = (cls.level && settings?.feeAmounts?.[cls.level]) || 0;
 
     const fees = await Fee.find({

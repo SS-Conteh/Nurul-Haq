@@ -6,6 +6,7 @@ const TeacherAttendance = require("../models/TeacherAttendance");
 const DailyQRCode = require("../models/DailyQRCode");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 
 const router = express.Router();
 
@@ -124,6 +125,7 @@ router.post(
           timeIn: nowLabel(),
           lateTag: isLate(cutoff) ? "Late" : "On Time",
           status: "Active",
+          academicYear: settings.academicYear || "",
         });
         return res.status(201).json({ record, action: "clock-in" });
       }
@@ -195,7 +197,8 @@ router.post(
     if (!allowed.includes(status)) {
       return res.status(400).json({ message: "Invalid status" });
     }
-    const update = { teacher, date, shift, status };
+    const settings = await Settings.findOne();
+    const update = { teacher, date, shift, status, academicYear: settings?.academicYear || "" };
     if (timeIn !== undefined) update.timeIn = timeIn;
     if (timeOut !== undefined) update.timeOut = timeOut;
     const record = await TeacherAttendance.findOneAndUpdate(
@@ -207,25 +210,28 @@ router.post(
   },
 );
 
-// GET /api/attendance/my - the signed-in staff member's OWN QR sign-in/out
-// history (not student attendance). Every scanning role uses this — the
-// admin-layer "Overview" screens pull any staff member's history via
-// /teachers instead.
+// GET /api/attendance/my?ay= - the signed-in staff member's OWN QR
+// sign-in/out history (not student attendance). Every scanning role uses
+// this — the admin-layer "Overview" screens pull any staff member's
+// history via /teachers instead.
 router.get(
   "/my",
   protect,
   authorize(...STAFF_ATTENDANCE_ROLES),
   async (req, res) => {
+    const settings = await Settings.findOne();
     const records = await TeacherAttendance.find({
       teacher: req.user._id,
+      ...yearFilter(settings?.academicYear, req.query.ay),
     }).sort("-date");
     res.json({ records });
   },
 );
 
-// GET /api/attendance?classId=&date=&studentId=
+// GET /api/attendance?classId=&date=&studentId=&ay=
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.classId) filter.classId = req.query.classId;
   if (req.query.studentId) filter.student = req.query.studentId;
   if (req.query.date) {
@@ -273,6 +279,7 @@ router.post(
   async (req, res) => {
     try {
       const { classId, date, records } = req.body; // records: [{student, status}]
+      const settings = await Settings.findOne();
       const d = new Date(date);
       const results = [];
       for (const r of records) {
@@ -290,6 +297,7 @@ router.post(
             date: new Date(date),
             status: r.status,
             markedBy: req.user._id,
+            academicYear: settings?.academicYear || "",
           },
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );

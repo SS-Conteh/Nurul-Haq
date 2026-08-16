@@ -93,7 +93,7 @@ async function computeRoster(Grade, User, student, classId, subjects, terms) {
  * `terms` = [termStringT1, termStringT2, termStringT3] as stored on Grade docs
  * (e.g. "Term 1 · 2026"); `termLabel` = which one is "current" for the title.
  */
-async function generateReportCard(res, { student, classDoc, subjects, terms, termLabel, session, settings, attendanceCounts, Grade, User, doc: sharedDoc, isBulk = false }) {
+async function generateReportCard(res, { student, classDoc, subjects, terms, termLabel, session, settings, attendanceCounts, Grade, User, promotion, doc: sharedDoc, isBulk = false }) {
   const { allGrades, classSize } = await computeRoster(Grade, User, student, classDoc?._id, subjects, terms);
 
   // Group grades by subject -> by term
@@ -513,7 +513,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // TOTAL MARKS row — lavender-tinted summary band
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "TOTAL MARKS", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "MEAN TOTAL MARKS", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
     const subjCount = subjects.length || 1;
     [
@@ -533,7 +533,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // PERCENTAGE row
   {
     let x = tableX;
-    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "PERCENTAGE", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
+    cellRect(doc, x, ty, SUBJECT_COL + MAX_COL, ROW_H, "MEAN PERCENTAGE", { bold: true, size: CELL_SIZE, fill: LAVENDER, color: BLACK });
     x += SUBJECT_COL + MAX_COL;
     const subjCount = subjects.length || 1;
     const pctOf = (a, b) => (a + b ? ((a + b) / (2 * subjCount)).toFixed(1) : "0.0");
@@ -628,11 +628,30 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   commentRow(0, ROYAL, "Class Teacher's Comments:", "Good, Keep improving", { withSignDate: true });
   commentRow(1, CYAN, "Principal's Comments:", "Good, Keep improving", { withSignDate: true });
 
-  // Promotion status — black for a normal/positive outcome, red when the
-  // note signals a repeat/trial/withdrawal, matching the school's red
-  // "highlighted value" accent rather than a traffic-light green/red.
-  const statusText = settings.promotionStatusNote || "-";
-  const isNegative = /repeat|trial|not\s*promoted|withdraw/i.test(statusText);
+  // Promotion status — the real, per-student decision from the auto-
+  // promotion engine (see utils/promotion.js and routes/promotions.js),
+  // not a static settings note. Nothing shows here until the General Admin
+  // has actually set the NEXT academic year in Settings — until then the
+  // current year hasn't been evaluated yet, so this stays blank rather
+  // than guessing. Black for Promoted/Graduating, the school's red
+  // "highlighted value" accent for Repeat/Pending.
+  let statusText = "-";
+  let isNegative = false;
+  if (promotion) {
+    if (promotion.status === "Promoted") {
+      statusText = promotion.toClass?.name
+        ? `Promoted to ${promotion.toClass.name}`
+        : "Promoted";
+    } else if (promotion.status === "Repeat") {
+      statusText = "To Repeat";
+      isNegative = true;
+    } else if (promotion.status === "Pending") {
+      statusText = "Pending Promotion (awaiting Admin decision)";
+      isNegative = true;
+    } else if (promotion.status === "Graduating") {
+      statusText = "Graduating";
+    }
+  }
   const statusColor = isNegative ? SCORE_RED : BLACK;
   commentRow(2, statusColor, "Promotion Status:", statusText, { withSignDate: false });
 

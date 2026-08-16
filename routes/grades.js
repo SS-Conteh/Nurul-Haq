@@ -1,13 +1,16 @@
 const express = require("express");
 const Grade = require("../models/Grade");
 const User = require("../models/User");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 
 const router = express.Router();
 
-// GET /api/grades?studentId=&classId=&term=&subject=
+// GET /api/grades?studentId=&classId=&term=&subject=&ay=
 router.get("/", protect, async (req, res) => {
-  const filter = {};
+  const settings = await Settings.findOne();
+  const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.studentId) filter.student = req.query.studentId;
   if (req.query.term) filter.term = req.query.term;
   if (req.query.subject) filter.subject = req.query.subject;
@@ -119,6 +122,7 @@ router.post(
         });
         await grade.save();
       } else {
+        const settings = await Settings.findOne();
         grade = await Grade.create({
           student,
           subject,
@@ -128,6 +132,7 @@ router.post(
           remark,
           position,
           teacher: req.user._id,
+          academicYear: settings?.academicYear || "",
         });
       }
       res.status(201).json({ grade });

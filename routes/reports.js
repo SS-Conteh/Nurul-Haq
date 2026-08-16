@@ -6,6 +6,7 @@ const Attendance = require("../models/Attendance");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const generateReportCard = require("../utils/generateReportCard");
+const Promotion = require("../models/Promotion");
 const { drawIdCard, layoutIdCardsOnA4, CARD_W, CARD_H } = require("../utils/generateIdCard");
 
 const router = express.Router();
@@ -70,6 +71,16 @@ router.get(
         Attendance.countDocuments({ student: student._id, status: "Late" }),
       ]);
 
+      // The promotion decision for THIS session, if the year has actually
+      // ended and been evaluated yet (see utils/promotion.js) — printed as
+      // "Promoted to: SSS 2" / "To Repeat" / "Pending Promotion" at the
+      // bottom of the report card. Nothing shows here until the General
+      // Admin sets the next academic year in Settings.
+      const promotion = await Promotion.findOne({ student: student._id, academicYear: session }).populate(
+        "toClass",
+        "name",
+      );
+
       await generateReportCard(res, {
         student,
         classDoc: classDocPlain,
@@ -81,6 +92,7 @@ router.get(
         attendanceCounts: { present, absent, late },
         Grade,
         User,
+        promotion,
       });
     } catch (err) {
       res.status(500).json({ message: err.message });
@@ -186,6 +198,11 @@ router.get(
           Attendance.countDocuments({ student: student._id, status: "Late" }),
         ]);
 
+        const promotion = await Promotion.findOne({ student: student._id, academicYear: session }).populate(
+          "toClass",
+          "name",
+        );
+
         await generateReportCard(res, {
           student,
           classDoc: classDocPlain,
@@ -197,6 +214,7 @@ router.get(
           attendanceCounts: { present, absent, late },
           Grade,
           User,
+          promotion,
           doc,
           isBulk: true,
         });

@@ -1,15 +1,23 @@
 const express = require("express");
 const Event = require("../models/Event");
+const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
-  const events = await Event.find().sort("date");
+  const settings = await Settings.findOne();
+  const events = await Event.find(yearFilter(settings?.academicYear, req.query.ay)).sort("date");
   res.json({ events });
 });
 
 router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
-  const event = await Event.create({ ...req.body, createdBy: req.user._id });
+  const settings = await Settings.findOne();
+  const event = await Event.create({
+    ...req.body,
+    createdBy: req.user._id,
+    academicYear: settings?.academicYear || "",
+  });
   res.status(201).json({ event });
 });
 

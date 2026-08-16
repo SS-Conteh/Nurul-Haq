@@ -22,6 +22,8 @@ const NoticeSchema = new mongoose.Schema(
       default: "students",
     },
     postedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    // Same purpose as Grade.academicYear — set once at creation.
+    academicYear: { type: String, default: "" },
     // Users who have cleared/deleted this notice for themselves only —
     // the notice still exists for everyone else and for the principal.
     clearedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
