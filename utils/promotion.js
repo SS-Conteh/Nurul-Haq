@@ -77,6 +77,17 @@ async function computePromotions(academicYear) {
   const students = await User.find({ role: "student" }).populate("classId");
   const results = { promoted: 0, pending: 0, repeat: 0, graduating: 0, skipped: 0 };
 
+  // A grade's own `academicYear` field is only reliable for grades entered
+  // AFTER Settings.academicYear existed — anything entered earlier can
+  // carry a blank/stale value there, which would make an exact-match
+  // filter silently miss real Term 3 data. The report card sidesteps this
+  // entirely by matching on the `term` string instead (e.g.
+  // "Term 3 · 2026"), so promotions match the exact same way here —
+  // consistent with what's actually printed on the report card, and
+  // immune to that field ever being wrong.
+  const yearPart = academicYear.split("/")[1] || academicYear;
+  const termStrings = [1, 2, 3].map((n) => `Term ${n} · ${yearPart}`);
+
   for (const student of students) {
     if (!student.classId) {
       results.skipped++;
@@ -90,13 +101,16 @@ async function computePromotions(academicYear) {
       continue;
     }
 
-    const grades = await Grade.find({ student: student._id, academicYear });
+    const grades = await Grade.find({
+      student: student._id,
+      term: { $in: termStrings },
+    });
     const bySubject = new Map();
     grades.forEach((g) => {
       const entry = bySubject.get(g.subject) || {};
-      if (g.term.startsWith("Term 1")) entry.t1 = g;
-      else if (g.term.startsWith("Term 2")) entry.t2 = g;
-      else if (g.term.startsWith("Term 3")) entry.t3 = g;
+      if (g.term === termStrings[0]) entry.t1 = g;
+      else if (g.term === termStrings[1]) entry.t2 = g;
+      else if (g.term === termStrings[2]) entry.t3 = g;
       bySubject.set(g.subject, entry);
     });
 
