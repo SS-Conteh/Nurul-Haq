@@ -7,6 +7,15 @@ const GradeSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    // Snapshot of which class the student was actually IN at the moment
+    // this grade was recorded — set once at creation and never touched
+    // again, even if the student is later promoted/moved to a different
+    // class. Without this, "grades for class X" could only be resolved by
+    // checking each student's CURRENT classId, which meant a promoted
+    // student's entire grade history would incorrectly follow them into
+    // their new class. Filtering/scoping by class must always use THIS
+    // field, never the student's live classId.
+    classId: { type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" },
     subject: { type: String, required: true },
     // No default — a grade must always be explicitly tagged with whatever
     // term is currently set in Settings (see routes/grades.js). A stray

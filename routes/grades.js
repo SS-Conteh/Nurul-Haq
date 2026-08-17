@@ -30,11 +30,10 @@ router.get("/", protect, async (req, res) => {
   if (req.user.role === "student") filter.student = req.user._id;
 
   if (req.query.classId && !req.query.studentId) {
-    const studentIds = await User.find({
-      role: "student",
-      classId: req.query.classId,
-    }).distinct("_id");
-    filter.student = { $in: studentIds };
+    // Match grades actually recorded while the student was in this class
+    // — NOT students currently in this class. A promoted student's old
+    // grades stay attached to the class they earned them in.
+    filter.classId = req.query.classId;
   }
 
   // A Junior School Admin (Nursery–JSS only) may never see grades for a
@@ -71,17 +70,16 @@ router.get("/", protect, async (req, res) => {
     const scopeOr = [];
     if (ownSubjects.length) scopeOr.push({ subject: { $in: ownSubjects } });
     if (ownClassId) {
-      const classStudentIds = await User.find({
-        role: "student",
-        classId: ownClassId,
-      }).distinct("_id");
-      scopeOr.push({ student: { $in: classStudentIds } });
+      // Grades actually recorded while a student was in this teacher's
+      // class — not just whichever students happen to be in it today.
+      scopeOr.push({ classId: ownClassId });
     }
     if (!scopeOr.length) return res.json({ grades: [] });
 
     const grades = await Grade.find({ $and: [filter, { $or: scopeOr }] })
       .populate({ path: "student", select: "name initials color classId avatarUrl", populate: { path: "classId", select: "name" } })
       .populate("teacher", "name")
+      .populate("classId", "name level")
       .lean();
     return res.json({ grades });
   }
@@ -89,6 +87,7 @@ router.get("/", protect, async (req, res) => {
   const grades = await Grade.find(filter)
     .populate({ path: "student", select: "name initials color classId avatarUrl", populate: { path: "classId", select: "name" } })
     .populate("teacher", "name")
+    .populate("classId", "name level")
     .lean();
   res.json({ grades });
 });
@@ -153,8 +152,13 @@ router.post(
         await grade.save();
       } else {
         const settings = await Settings.findOne();
+        const studentDoc = await User.findById(student).select("classId");
         grade = await Grade.create({
           student,
+          // Snapshot the class the student is in RIGHT NOW — this is what
+          // permanently ties the grade to that class, even if the student
+          // is promoted to a different one later.
+          classId: studentDoc?.classId || null,
           subject,
           term,
           test,
