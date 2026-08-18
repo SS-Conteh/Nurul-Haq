@@ -46,13 +46,22 @@ router.get("/", protect, async (req, res) => {
     // Fetched first (not in the Promise.all below) because the fee
     // aggregation needs to know the current academic year to scope its sum.
     const settings = await Settings.findOne();
-    // Scope the average-grade figure to the current academic year (same
+    // Which year this dashboard is reporting on: the nav dropdown's ay=
+    // query param when a past year is being reviewed, otherwise the
+    // current academic year. EVERY figure below must key off this, not
+    // off settings.academicYear directly — otherwise switching the
+    // dropdown to a past year silently keeps showing current-year numbers,
+    // which is exactly what happened before this fix (the dashboard was
+    // the one page in the whole app that never actually looked at ay=).
+    const requestedYear = req.query.ay || "";
+    const viewingPastYear = !!requestedYear;
+    // Scope the average-grade figure to the requested academic year (same
     // fallback-to-blank rule as everywhere else — see utils/academicYear.js
     // — so pre-existing grades from before this field existed still count
     // toward the CURRENT year's average until they age out). Without this,
     // the dashboard's average kept blending every year's grades together
     // forever, so it never visibly "reset" when a new academic year began.
-    const gradeYearMatch = yearFilter(settings?.academicYear, null);
+    const gradeYearMatch = yearFilter(settings?.academicYear, requestedYear);
 
     const [
       teacherCount,
@@ -76,19 +85,25 @@ router.get("/", protect, async (req, res) => {
             { $match: gradeYearMatch },
             { $group: { _id: null, avg: { $avg: "$total" } } },
           ]),
-      role === "juniorAdmin"
-        ? Attendance.find({ date: { $gte: todayStart, $lte: todayEnd }, classId: { $in: scopeClassIds } })
-            .select("status")
-            .lean()
-        : Attendance.find({ date: { $gte: todayStart, $lte: todayEnd } })
-            .select("status")
-            .lean(),
-      // Total cash collected this academic year — every installment a
-      // student has paid, whether that installment alone was Paid/Partial/
-      // Unpaid (fees are annual now, so a "Partial" installment's amount is
-      // still real money in hand and should count toward this figure).
+      // "Today's attendance rate" is inherently a live, current-day figure
+      // — it has no meaning for an archived year, so a past year selection
+      // just shows 0 rather than querying at all.
+      viewingPastYear
+        ? Promise.resolve([])
+        : role === "juniorAdmin"
+          ? Attendance.find({ date: { $gte: todayStart, $lte: todayEnd }, classId: { $in: scopeClassIds } })
+              .select("status")
+              .lean()
+          : Attendance.find({ date: { $gte: todayStart, $lte: todayEnd } })
+              .select("status")
+              .lean(),
+      // Total cash collected in the requested academic year — every
+      // installment a student has paid, whether that installment alone was
+      // Paid/Partial/Unpaid (fees are annual now, so a "Partial"
+      // installment's amount is still real money in hand and should count
+      // toward this figure).
       Fee.aggregate([
-        { $match: { academicYear: settings?.academicYear || "" } },
+        { $match: { academicYear: requestedYear || settings?.academicYear || "" } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
       Notice.find().sort("-createdAt").limit(3).lean(),
@@ -116,6 +131,12 @@ router.get("/", protect, async (req, res) => {
   }
 
   if (role === "teacher") {
+    // Same as the admin/principal branch above: honor the nav dropdown's
+    // ay= so a teacher reviewing a past year actually sees that year's
+    // grade average on their dashboard instead of the current year's.
+    const requestedYear = req.query.ay || "";
+    const viewingPastYear = !!requestedYear;
+
     const classId = req.user.classTeacherOf;
     const isClassMaster = !!classId;
 
@@ -140,7 +161,9 @@ router.get("/", protect, async (req, res) => {
         isClassMaster
           ? User.find({ role: "student", classId }).select("_id").lean()
           : Promise.resolve([]),
-        isClassMaster
+        // As with the admin dashboard, "today's" attendance rate has no
+        // meaning while reviewing an archived year — skip it and show 0.
+        isClassMaster && !viewingPastYear
           ? Attendance.find({
               classId,
               date: { $gte: todayStart, $lte: todayEnd },
@@ -168,16 +191,18 @@ router.get("/", protect, async (req, res) => {
       ? await Grade.find({
           subject: { $in: req.user.subjects },
           student: { $in: scopeStudents.map((s) => s._id) },
-          ...yearFilter(settings?.academicYear, null),
+          ...yearFilter(settings?.academicYear, requestedYear),
         })
           .select("total")
           .lean()
       : [];
     const avgScore = avg(subjectGrades, (g) => g.total);
-    const pendingGrades = Math.max(
-      0,
-      scopeStudents.length - subjectGrades.length,
-    );
+    // "Pending" grades (students still owed a grade) is a current-year,
+    // actionable concept tied to today's class roster — meaningless for a
+    // read-only archived year, so it's just 0 there.
+    const pendingGrades = viewingPastYear
+      ? 0
+      : Math.max(0, scopeStudents.length - subjectGrades.length);
 
     return res.json({
       role,
@@ -197,7 +222,7 @@ router.get("/", protect, async (req, res) => {
     // change, even though the Grades/Attendance pages themselves correctly
     // start fresh.
     const settings = await Settings.findOne();
-    const yf = yearFilter(settings?.academicYear, null);
+    const yf = yearFilter(settings?.academicYear, req.query.ay);
     const [grades, attendance] = await Promise.all([
       Grade.find({ student: req.user._id, ...yf }).lean(),
       Attendance.find({ student: req.user._id, ...yf }).select("status").lean(),
