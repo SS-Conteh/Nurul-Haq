@@ -1,6 +1,7 @@
 const express = require("express");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
+const { applyPromotionsForYear } = require("../utils/promotion");
 const router = express.Router();
 
 // GET /api/settings/public - no login required. Powers the public landing
@@ -38,12 +39,23 @@ router.get("/", protect, async (req, res) => {
 // request body says, so the school can never accidentally roll into a new
 // academic year still "on" the old year's Term 3. The General Admin has to
 // come back and explicitly pick Term 1 for the new year before anyone can
-// enter grades again (see routes/grades.js). Auto-promotion is NOT run
-// here — that's a separate, explicit action (see routes/promotions.js
-// POST /compute) tied to Term 3 grades being in, not to the calendar year
-// changing. Opening/bank balance, Teachers, Admins, Library, Settings
-// itself, and Classes are completely unaffected by a year change — they
-// were never year-scoped to begin with.
+// enter grades again (see routes/grades.js). Auto-promotion (deciding WHO
+// gets promoted) is NOT run here — that's a separate, explicit action (see
+// routes/promotions.js POST /compute) tied to Term 3 grades being in, not
+// to the calendar year changing. What DOES happen here, immediately and
+// synchronously, is APPLYING every already-decided promotion from the year
+// that just ended (see applyPromotionsForYear in utils/promotion.js): each
+// Promoted student's classId is moved to their new class right now, a
+// Repeat student's is confirmed unchanged, and both become eligible for
+// their congratulations/encouragement popup on next login. Grades,
+// attendance, and every other record are still never deleted or archived —
+// they already carry the academic year they were created under, and a
+// promoted student's grades additionally carry the CLASS they were
+// recorded in (Grade.classId), so their new class starts genuinely empty
+// while their old records stay exactly where they are, one dropdown away.
+// Opening/bank balance, Teachers, Admins, Library, Settings itself, and
+// Classes are completely unaffected by a year change — they were never
+// year-scoped to begin with.
 // Builds the exact term string a grade/exam under the given settings would
 // carry — see the identical helper in routes/grades.js. Duplicated rather
 // than imported to keep this route free of a grades.js dependency; the two
@@ -92,7 +104,15 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
 
   await settings.save();
 
-  res.json({ settings, isNewYear: !!isNewYear });
+  // Immediately apply every decided-but-not-yet-applied promotion from the
+  // year that just ended — see the big comment above PUT "/" for why this
+  // lives here rather than at compute time.
+  let promotionResults = null;
+  if (isNewYear) {
+    promotionResults = await applyPromotionsForYear(previousYear);
+  }
+
+  res.json({ settings, isNewYear: !!isNewYear, promotionResults });
 });
 
 module.exports = router;

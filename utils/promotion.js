@@ -154,9 +154,10 @@ async function computePromotions(academicYear) {
         status: "Promoted",
         note: next ? "" : "No matching next-year class found — placed manually by an Admin",
       });
-      if (next) {
-        await User.findByIdAndUpdate(student._id, { classId: next._id });
-      }
+      // NOTE: the student's classId is deliberately NOT changed here — they
+      // stay in their current class until the Admin actually sets a NEW
+      // academic year (see applyPromotionsForYear below), which is when the
+      // move is executed for every decided student at once.
       results.promoted++;
     } else if (yearlyMean >= 45) {
       await Promotion.create({
@@ -184,4 +185,51 @@ async function computePromotions(academicYear) {
   return results;
 }
 
-module.exports = { computePromotions, resolveNextClass };
+// Runs exactly once per academic-year change, called from routes/settings.js
+// the moment the General Admin sets a NEW academicYear (never on its own,
+// never automatically otherwise). `oldYear` is the year that just ended.
+// This is where every decided-but-not-yet-applied Promotion for that year
+// is actually EXECUTED:
+//   Promoted    -> student's classId is moved to toClass (their new class
+//                  starts with zero records — every Grade permanently
+//                  remembers the class it was recorded in, so nothing
+//                  follows them across)
+//   Repeat      -> classId is left as-is (already correct); just marked
+//                  applied so the student's encouragement popup can fire
+//   Graduating  -> classId is left as-is (an Admin handles their actual
+//                  exit manually); just marked applied so their popup fires
+//   Pending     -> left completely alone — an un-decided promotion is NEVER
+//                  auto-resolved by a year change. Counted separately so
+//                  the Admin can see how many still need a decision.
+// Safe to call even if some/all records were already applied (e.g. this
+// year change is being retried) — only ever touches appliedAt: null records.
+async function applyPromotionsForYear(oldYear) {
+  const results = { promoted: 0, repeat: 0, graduating: 0, stillPending: 0 };
+  if (!oldYear) return results;
+
+  const decided = await Promotion.find({
+    academicYear: oldYear,
+    appliedAt: null,
+    status: { $in: ["Promoted", "Repeat", "Graduating"] },
+  });
+
+  for (const promo of decided) {
+    if (promo.status === "Promoted" && promo.toClass) {
+      await User.findByIdAndUpdate(promo.student, { classId: promo.toClass });
+    }
+    promo.appliedAt = new Date();
+    await promo.save();
+    if (promo.status === "Promoted") results.promoted++;
+    else if (promo.status === "Repeat") results.repeat++;
+    else results.graduating++;
+  }
+
+  results.stillPending = await Promotion.countDocuments({
+    academicYear: oldYear,
+    status: "Pending",
+  });
+
+  return results;
+}
+
+module.exports = { computePromotions, applyPromotionsForYear, resolveNextClass };
