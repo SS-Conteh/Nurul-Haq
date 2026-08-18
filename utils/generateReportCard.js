@@ -636,7 +636,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
 
   roundedFillStroke(tableX, blockTop, infoColW, commentsBlockH, 5, "#fdfdfd", GRID_BLUE, 0.8);
 
-  function commentRow(idx, accentColor, label, value, { withSignDate = false } = {}) {
+  function commentRow(idx, accentColor, label, value, { withSignDate = false, valueColor = BLACK } = {}) {
     const ry = blockTop + idx * commentRowH;
     if (idx > 0) doc.moveTo(tableX, ry).lineTo(tableX + infoColW, ry).lineWidth(0.6).stroke(GRID_BLUE);
     doc.rect(tableX, ry, 3, commentRowH).fill(accentColor);
@@ -645,7 +645,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
     const labelW = doc.widthOfString(label);
     const valueX = signX + labelW + 6;
     const valueMaxW = (withSignDate ? signZoneX : tableX + infoColW - cPad) - valueX - 6;
-    fitOneLine(value, valueX, midY, Math.max(valueMaxW, 20), 8, 6, "Helvetica-Oblique", BLACK);
+    fitOneLine(value, valueX, midY, Math.max(valueMaxW, 20), 8, 6, "Helvetica-Oblique", valueColor);
     if (withSignDate) {
       const dateStr = new Date().toLocaleDateString("en-GB");
       doc.font("Helvetica-Bold").fontSize(8).fillColor(BLACK).text("Sign.:", signZoneX, midY);
@@ -663,27 +663,36 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
   // not a static settings note. Nothing shows here until the General Admin
   // has actually set the NEXT academic year in Settings — until then the
   // current year hasn't been evaluated yet, so this stays blank rather
-  // than guessing. Black for Promoted/Graduating, the school's red
-  // "highlighted value" accent for Repeat/Pending.
+  // than guessing. The VALUE text itself is colored by outcome — blue for
+  // Promoted, red for Repeat/Pending, black for Graduating/unset — while
+  // the little accent bar on the left stays red for anything not-yet-
+  // resolved-favorably, same as before.
   let statusText = "-";
+  let statusValueColor = BLACK;
   let isNegative = false;
   if (promotion) {
     if (promotion.status === "Promoted") {
       statusText = promotion.toClass?.name
         ? `Promoted to ${promotion.toClass.name}`
         : "Promoted";
+      statusValueColor = SCORE_BLUE;
     } else if (promotion.status === "Repeat") {
       statusText = "To Repeat";
       isNegative = true;
+      statusValueColor = SCORE_RED;
     } else if (promotion.status === "Pending") {
       statusText = "Pending Promotion (awaiting Admin decision)";
       isNegative = true;
+      statusValueColor = SCORE_RED;
     } else if (promotion.status === "Graduating") {
       statusText = "Graduating";
     }
   }
   const statusColor = isNegative ? SCORE_RED : BLACK;
-  commentRow(2, statusColor, "Promotion Status:", statusText, { withSignDate: false });
+  commentRow(2, statusColor, "Promotion Status:", statusText, {
+    withSignDate: false,
+    valueColor: statusValueColor,
+  });
 
   // Right: the official stamp gets its own section — a plain vertical
   // divider (no boxed outline) with the stamp shown as large as the

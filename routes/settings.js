@@ -1,7 +1,7 @@
 const express = require("express");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
-const { applyPromotionsForYear } = require("../utils/promotion");
+const { applyPromotionsForYear, computePromotions } = require("../utils/promotion");
 const router = express.Router();
 
 // GET /api/settings/public - no login required. Powers the public landing
@@ -39,7 +39,15 @@ router.get("/", protect, async (req, res) => {
 // request body says, so the school can never accidentally roll into a new
 // academic year still "on" the old year's Term 3. The General Admin has to
 // come back and explicitly pick Term 1 for the new year before anyone can
-// enter grades again (see routes/grades.js). Auto-promotion (deciding WHO
+// enter grades again (see routes/grades.js).
+//
+// UPDATE: a year change can no longer be relied on to have had the
+// separate "Run Term 3 Promotions" button clicked first — if it wasn't,
+// this route now runs computePromotions(previousYear) itself, right
+// before applying, so a class actually empties out and refills on year
+// change even if nobody remembered that separate step (computePromotions
+// is safe to re-run: already-decided students are skipped, see
+// utils/promotion.js). Auto-promotion (deciding WHO
 // gets promoted) is NOT run here — that's a separate, explicit action (see
 // routes/promotions.js POST /compute) tied to Term 3 grades being in, not
 // to the calendar year changing. What DOES happen here, immediately and
@@ -109,6 +117,12 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
   // lives here rather than at compute time.
   let promotionResults = null;
   if (isNewYear) {
+    // Make sure every student with Term 3 grades on file for the year that
+    // just ended actually has a decided Promotion record before we apply —
+    // covers the case where "Run Term 3 Promotions" was never clicked
+    // separately. No-op for students already decided (manually approved/
+    // rejected or previously auto-computed).
+    await computePromotions(previousYear);
     promotionResults = await applyPromotionsForYear(previousYear);
   }
 

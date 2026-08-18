@@ -7,6 +7,7 @@ const Fee = require("../models/Fee");
 const Settings = require("../models/Settings");
 const Notice = require("../models/Notice");
 const { protect } = require("../middleware/auth");
+const { yearFilter } = require("../utils/academicYear");
 const router = express.Router();
 
 function avg(arr, fn) {
@@ -45,6 +46,13 @@ router.get("/", protect, async (req, res) => {
     // Fetched first (not in the Promise.all below) because the fee
     // aggregation needs to know the current academic year to scope its sum.
     const settings = await Settings.findOne();
+    // Scope the average-grade figure to the current academic year (same
+    // fallback-to-blank rule as everywhere else — see utils/academicYear.js
+    // — so pre-existing grades from before this field existed still count
+    // toward the CURRENT year's average until they age out). Without this,
+    // the dashboard's average kept blending every year's grades together
+    // forever, so it never visibly "reset" when a new academic year began.
+    const gradeYearMatch = yearFilter(settings?.academicYear, null);
 
     const [
       teacherCount,
@@ -58,12 +66,16 @@ router.get("/", protect, async (req, res) => {
       User.countDocuments(scopeStudentFilter),
       role === "juniorAdmin"
         ? Grade.aggregate([
+            { $match: gradeYearMatch },
             { $lookup: { from: "users", localField: "student", foreignField: "_id", as: "s" } },
             { $unwind: "$s" },
             { $match: { "s.classId": { $in: scopeClassIds } } },
             { $group: { _id: null, avg: { $avg: "$total" } } },
           ])
-        : Grade.aggregate([{ $group: { _id: null, avg: { $avg: "$total" } } }]),
+        : Grade.aggregate([
+            { $match: gradeYearMatch },
+            { $group: { _id: null, avg: { $avg: "$total" } } },
+          ]),
       role === "juniorAdmin"
         ? Attendance.find({ date: { $gte: todayStart, $lte: todayEnd }, classId: { $in: scopeClassIds } })
             .select("status")
@@ -151,10 +163,12 @@ router.get("/", protect, async (req, res) => {
       ? Math.round((present / todaysAttendance.length) * 100)
       : 0;
 
+    const settings = await Settings.findOne();
     const subjectGrades = (req.user.subjects || []).length
       ? await Grade.find({
           subject: { $in: req.user.subjects },
           student: { $in: scopeStudents.map((s) => s._id) },
+          ...yearFilter(settings?.academicYear, null),
         })
           .select("total")
           .lean()
@@ -176,9 +190,17 @@ router.get("/", protect, async (req, res) => {
   }
 
   if (role === "student") {
+    // Same year-scoping as the Grades and Attendance pages: default view
+    // is the current academic year (plus pre-existing records that predate
+    // the academicYear field), not the student's entire history — otherwise
+    // "overall average" and "attendance rate" here never reset on a year
+    // change, even though the Grades/Attendance pages themselves correctly
+    // start fresh.
+    const settings = await Settings.findOne();
+    const yf = yearFilter(settings?.academicYear, null);
     const [grades, attendance] = await Promise.all([
-      Grade.find({ student: req.user._id }).lean(),
-      Attendance.find({ student: req.user._id }).select("status").lean(),
+      Grade.find({ student: req.user._id, ...yf }).lean(),
+      Attendance.find({ student: req.user._id, ...yf }).select("status").lean(),
     ]);
     const overallAvg = avg(grades, (g) => g.total);
     const present = attendance.filter((a) => a.status !== "Absent").length;
