@@ -26,13 +26,34 @@ async function generateNextAdmissionNo() {
 
 // Helper: compute a student's average score & attendance rate for a single
 // student (used by GET /:id, where one extra pair of queries is cheap).
-async function enrichStudent(studentDoc) {
-  const grades = await Grade.find({ student: studentDoc._id });
+//
+// IMPORTANT: a student's "average" must always be scoped to a SPECIFIC
+// class (see Grade.classId / Attendance.classId comments) — never blended
+// across every class they've ever passed through. Otherwise a student's
+// average from their OLD class keeps bleeding into whatever NEW class
+// they're promoted into (and vice-versa), which is exactly the bug this
+// was rewritten to fix. `scopeClassId`:
+//   - a specific class id -> average is computed ONLY from records tagged
+//     with that class (used when the caller is explicitly reviewing one
+//     class, current or historical)
+//   - omitted -> defaults to the student's own CURRENT classId, so a
+//     general "all students" listing shows each student's average for the
+//     class they're in right now, not their lifetime history.
+async function enrichStudent(studentDoc, scopeClassId) {
+  const classId = scopeClassId || studentDoc.classId || null;
+  const gradeFilter = { student: studentDoc._id };
+  const attFilter = { student: studentDoc._id };
+  if (classId) {
+    gradeFilter.classId = classId;
+    attFilter.classId = classId;
+  }
+
+  const grades = await Grade.find(gradeFilter);
   const avg = grades.length
     ? Math.round(grades.reduce((s, g) => s + g.total, 0) / grades.length)
     : 0;
 
-  const records = await Attendance.find({ student: studentDoc._id });
+  const records = await Attendance.find(attFilter);
   const present = records.filter(
     (r) => r.status === "Present" || r.status === "Late",
   ).length;
@@ -51,21 +72,35 @@ async function enrichStudent(studentDoc) {
 // class of 200 students meant 400 separate round-trips to MongoDB just to
 // load one table — this was the single biggest cause of slow page loads.
 // This does it in exactly 2 queries total, no matter how many students,
-// by aggregating grades/attendance grouped by student in the database.
-async function enrichStudentsBatch(studentDocs) {
+// by aggregating grades/attendance grouped by (student, class) in the
+// database, then picking out the right (student, class) cell per row.
+//
+// `scopeClassId`: same meaning as in enrichStudent above — pass a class id
+// when every row in this batch should be scored against ONE specific class
+// (e.g. reviewing "Class X"'s roster, including alumni who've since moved
+// on). Leave undefined for a mixed-class listing, where each student is
+// scored against their OWN current classId so a promoted student's old
+// class average never bleeds into their new class (or vice-versa).
+async function enrichStudentsBatch(studentDocs, scopeClassId) {
   const ids = studentDocs.map((s) => s._id);
   if (!ids.length) return [];
 
   const [gradeStats, attStats] = await Promise.all([
     Grade.aggregate([
       { $match: { student: { $in: ids } } },
-      { $group: { _id: "$student", total: { $sum: "$total" }, count: { $sum: 1 } } },
+      {
+        $group: {
+          _id: { student: "$student", classId: "$classId" },
+          total: { $sum: "$total" },
+          count: { $sum: 1 },
+        },
+      },
     ]),
     Attendance.aggregate([
       { $match: { student: { $in: ids } } },
       {
         $group: {
-          _id: "$student",
+          _id: { student: "$student", classId: "$classId" },
           present: {
             $sum: { $cond: [{ $in: ["$status", ["Present", "Late"]] }, 1, 0] },
           },
@@ -75,23 +110,43 @@ async function enrichStudentsBatch(studentDocs) {
     ]),
   ]);
 
-  const avgByStudent = {};
+  const gradeCell = {};
   gradeStats.forEach((g) => {
-    avgByStudent[String(g._id)] = g.count ? Math.round(g.total / g.count) : 0;
+    const key = `${g._id.student}_${g._id.classId || ""}`;
+    gradeCell[key] = g.count ? Math.round(g.total / g.count) : 0;
   });
-  const attByStudent = {};
+  const attCell = {};
   attStats.forEach((a) => {
-    attByStudent[String(a._id)] = a.count
-      ? Math.round((a.present / a.count) * 100)
-      : 100;
+    const key = `${a._id.student}_${a._id.classId || ""}`;
+    attCell[key] = a.count ? Math.round((a.present / a.count) * 100) : 100;
   });
 
   return studentDocs.map((s) => {
     const obj = s.toSafeObject();
-    obj.avg = avgByStudent[String(s._id)] || 0;
-    obj.attendanceRate = attByStudent[String(s._id)] ?? 100;
+    const classId = String(
+      scopeClassId || (s.classId && (s.classId._id || s.classId)) || "",
+    );
+    const key = `${s._id}_${classId}`;
+    obj.avg = gradeCell[key] || 0;
+    obj.attendanceRate = attCell[key] ?? 100;
     return obj;
   });
+}
+
+// Helper: every studentId who has ever left a trace (a Grade or an
+// Attendance record) in the given class — i.e. the FULL historical roster
+// of that class, including students who've since been promoted out of it.
+// Used only when a caller explicitly opts into reviewing class history
+// (?history=1); ordinary "who's in this class" queries stay scoped to the
+// students' live classId, exactly as before, so day-to-day flows like
+// marking attendance or assigning a fee never see an alumnus by accident.
+async function historicalStudentIdsForClass(classId) {
+  const [gradeIds, attIds] = await Promise.all([
+    Grade.find({ classId }).distinct("student"),
+    Attendance.find({ classId }).distinct("student"),
+  ]);
+  const set = new Set([...gradeIds, ...attIds].map(String));
+  return [...set];
 }
 
 // GET /api/students  (principal/admin: all, juniorAdmin/juniorBursar:
@@ -128,15 +183,56 @@ router.get(
       .populate("classId", "name level classGroup")
       .sort("name");
 
+    // Opt-in only, and only meaningful when a single classId was requested:
+    // "history=1" (or "true") pulls in every student who has EVER had a
+    // grade or attendance record logged under that class, even if they've
+    // since been promoted somewhere else. Without this, a promoted
+    // student's records were effectively unreachable through the Students
+    // page the moment their live classId changed — the class they earned
+    // those records in would show an empty/incomplete roster forever. This
+    // is what lets teachers/admins actually review past academic records.
+    const wantsHistory =
+      (req.query.history === "1" || req.query.history === "true") &&
+      !!req.query.classId &&
+      // A teacher asking for history on a class outside their own scope
+      // still gets nothing — same rule as the live roster above.
+      String(filter.classId || "") === String(req.query.classId);
+    let alumniIds = [];
+    if (wantsHistory) {
+      const currentIds = new Set(students.map((s) => String(s._id)));
+      const historicalIds = await historicalStudentIdsForClass(
+        req.query.classId,
+      );
+      alumniIds = historicalIds.filter((id) => !currentIds.has(id));
+    }
+    let alumni = [];
+    if (alumniIds.length) {
+      alumni = await User.find({ _id: { $in: alumniIds }, role: "student" })
+        .populate("classId", "name level classGroup")
+        .sort("name");
+    }
+
     // Junior School Admin (Nursery-JSS) and the Junior Bursar can never
     // see SSS students, no matter what level filter is passed in. The
     // Senior Bursar is the mirror case — SSS is all they're ever scoped
-    // to, since that's the only fee level they handle.
+    // to, since that's the only fee level they handle. For alumni rows,
+    // this is judged by the level of the class being REVIEWED (the class
+    // the records actually belong to), not the student's current class —
+    // a Junior Admin reviewing an old JSS3 roster can still see a student
+    // who has since been promoted into SSS, since JSS3 itself is in scope.
+    let reviewedClassLevel = null;
+    if (alumni.length && req.query.classId) {
+      const SchoolClass = require("../models/SchoolClass");
+      const reviewedClass = await SchoolClass.findById(req.query.classId).select("level");
+      reviewedClassLevel = reviewedClass?.level || null;
+    }
     if (req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") {
       students = students.filter((s) => s.classId?.level !== "SSS");
+      alumni = alumni.filter((s) => reviewedClassLevel !== "SSS");
     }
     if (req.user.role === "seniorBursar") {
       students = students.filter((s) => s.classId?.level === "SSS");
+      alumni = alumni.filter((s) => reviewedClassLevel === "SSS");
     }
     if (req.query.level) {
       students = students.filter((s) => s.classId?.level === req.query.level);
@@ -146,7 +242,21 @@ router.get(
         (s) => s.classId?.classGroup === req.query.classGroup,
       );
     }
-    const enriched = await enrichStudentsBatch(students);
+
+    // Scope every average shown here to ONE consistent class: the class
+    // being explicitly reviewed (req.query.classId), if any — whether
+    // that's the live roster or an alumnus who's moved on. Otherwise (no
+    // classId filter — a mixed, org-wide listing) each student is scored
+    // against their own current class only, never their whole history.
+    const scopeClassId = req.query.classId || undefined;
+    const enrichedCurrent = await enrichStudentsBatch(students, scopeClassId);
+    const enrichedAlumni = alumni.length
+      ? (await enrichStudentsBatch(alumni, scopeClassId)).map((s) => ({
+          ...s,
+          isAlumnus: true,
+        }))
+      : [];
+    const enriched = [...enrichedCurrent, ...enrichedAlumni];
     res.json({ students: enriched, count: enriched.length });
   },
 );
@@ -164,14 +274,90 @@ router.get(
   },
 );
 
-// GET /api/students/:id
+// GET /api/students/:id — optionally pass ?classId= to score the returned
+// avg/attendanceRate against one specific class (current or a past one the
+// student has since moved on from). Without it, defaults to the student's
+// own current classId.
 router.get("/:id", protect, async (req, res) => {
   const student = await User.findOne({
     _id: req.params.id,
     role: "student",
   }).populate("classId", "name level classGroup");
   if (!student) return res.status(404).json({ message: "Student not found" });
-  res.json({ student: await enrichStudent(student) });
+  res.json({
+    student: await enrichStudent(student, req.query.classId || undefined),
+  });
+});
+
+// GET /api/students/:id/history — every class this student has ever left a
+// grade or attendance trace in (their current class plus any they've been
+// promoted out of), each with its own average computed ONLY from records
+// tagged to that class. This is what lets a teacher/admin pull up a
+// student's profile and still see the class(es) they came from, with the
+// grades/records they earned there intact and un-blended with wherever
+// they are now.
+router.get("/:id/history", protect, async (req, res) => {
+  const student = await User.findOne({ _id: req.params.id, role: "student" });
+  if (!student) return res.status(404).json({ message: "Student not found" });
+
+  const SchoolClass = require("../models/SchoolClass");
+  const [gradeGroups, attGroups] = await Promise.all([
+    Grade.aggregate([
+      { $match: { student: student._id } },
+      {
+        $group: {
+          _id: { classId: "$classId", academicYear: "$academicYear" },
+          total: { $sum: "$total" },
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+    Attendance.aggregate([
+      { $match: { student: student._id } },
+      {
+        $group: {
+          _id: { classId: "$classId", academicYear: "$academicYear" },
+          present: {
+            $sum: { $cond: [{ $in: ["$status", ["Present", "Late"]] }, 1, 0] },
+          },
+          count: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  // Merge grade + attendance stats per (classId, academicYear) cell.
+  const cells = {};
+  gradeGroups.forEach((g) => {
+    const key = `${g._id.classId || ""}_${g._id.academicYear || ""}`;
+    cells[key] = cells[key] || { classId: g._id.classId, academicYear: g._id.academicYear };
+    cells[key].avg = g.count ? Math.round(g.total / g.count) : 0;
+    cells[key].gradeCount = g.count;
+  });
+  attGroups.forEach((a) => {
+    const key = `${a._id.classId || ""}_${a._id.academicYear || ""}`;
+    cells[key] = cells[key] || { classId: a._id.classId, academicYear: a._id.academicYear };
+    cells[key].attendanceRate = a.count ? Math.round((a.present / a.count) * 100) : 100;
+  });
+
+  const classIds = [...new Set(Object.values(cells).map((c) => String(c.classId || "")))].filter(Boolean);
+  const classes = await SchoolClass.find({ _id: { $in: classIds } }).select("name level classGroup");
+  const classById = {};
+  classes.forEach((c) => (classById[String(c._id)] = c));
+
+  const history = Object.values(cells)
+    .map((c) => ({
+      classId: c.classId,
+      class: c.classId ? classById[String(c.classId)] || null : null,
+      academicYear: c.academicYear || "",
+      avg: c.avg ?? 0,
+      attendanceRate: c.attendanceRate ?? 100,
+      isCurrentClass:
+        !!student.classId && String(student.classId) === String(c.classId),
+    }))
+    .sort((a, b) => (b.academicYear || "").localeCompare(a.academicYear || ""));
+
+  res.json({ history });
 });
 
 // POST /api/students  - enroll a new student (admin, juniorAdmin, or
