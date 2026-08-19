@@ -62,6 +62,10 @@ router.get("/", protect, async (req, res) => {
     // the dashboard's average kept blending every year's grades together
     // forever, so it never visibly "reset" when a new academic year began.
     const gradeYearMatch = yearFilter(settings?.academicYear, requestedYear);
+    // Optional further narrowing to one term (the Dashboard's term
+    // dropdown) — on top of, not instead of, the academic-year scoping
+    // above.
+    if (req.query.term) gradeYearMatch.term = req.query.term;
 
     const [
       teacherCount,
@@ -192,6 +196,7 @@ router.get("/", protect, async (req, res) => {
           subject: { $in: req.user.subjects },
           student: { $in: scopeStudents.map((s) => s._id) },
           ...yearFilter(settings?.academicYear, requestedYear),
+          ...(req.query.term ? { term: req.query.term } : {}),
         })
           .select("total")
           .lean()

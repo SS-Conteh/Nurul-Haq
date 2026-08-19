@@ -14,4 +14,17 @@ function yearFilter(currentAcademicYear, requestedYear) {
   return { academicYear: { $in: [currentAcademicYear, "", null] } };
 }
 
-module.exports = { yearFilter };
+// The exact "Term X · YYYY" string a NEW term-scoped record should carry
+// — e.g. Settings.currentTerm "Term 2" + Settings.academicYear
+// "2025/2026" -> "Term 2 · 2026". Shared by every route that stamps a
+// record with the current term at creation (Grade, Attendance,
+// Assignment, Notice), so they can never drift out of sync with each
+// other. Returns null if either piece hasn't been set yet in Settings.
+function currentTermString(settings) {
+  if (!settings?.currentTerm || !settings?.academicYear) return null;
+  const yearPart =
+    settings.academicYear.split("/")[1] || settings.academicYear;
+  return `${settings.currentTerm} · ${yearPart}`;
+}
+
+module.exports = { yearFilter, currentTermString };

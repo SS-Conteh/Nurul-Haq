@@ -13,8 +13,15 @@ router.get("/profile", protect, async (req, res) => {
   res.json({ user: user.toSafeObject() });
 });
 
-// PUT /api/users/profile - edit own profile
+// PUT /api/users/profile - edit own profile. Every role except a student
+// may edit their own profile here — a student's info is enrollment/
+// admin-office data, not something the student themself should change.
 router.put("/profile", protect, async (req, res) => {
+  if (req.user.role === "student") {
+    return res
+      .status(403)
+      .json({ message: "Students cannot edit their own profile." });
+  }
   try {
     const allowed = [
       "name",

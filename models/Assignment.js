@@ -28,6 +28,12 @@ const AssignmentSchema = new mongoose.Schema(
     // year start with a clean assignments list without deleting last
     // year's — see utils/academicYear.js.
     academicYear: { type: String, default: "" },
+    // Same purpose as academicYear, but for the current TERM — set once
+    // at creation from Settings.currentTerm/academicYear (see
+    // utils/academicYear.js currentTermString). Powers the term dropdown
+    // on the Assignments page. Empty string on assignments created
+    // before this field existed.
+    term: { type: String, default: "" },
     submissions: [
       {
         student: { type: mongoose.Schema.Types.ObjectId, ref: "User" },

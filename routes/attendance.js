@@ -6,7 +6,7 @@ const TeacherAttendance = require("../models/TeacherAttendance");
 const DailyQRCode = require("../models/DailyQRCode");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
-const { yearFilter } = require("../utils/academicYear");
+const { yearFilter, currentTermString } = require("../utils/academicYear");
 
 const router = express.Router();
 
@@ -228,10 +228,11 @@ router.get(
   },
 );
 
-// GET /api/attendance?classId=&date=&studentId=&ay=
+// GET /api/attendance?classId=&date=&studentId=&ay=&term=
 router.get("/", protect, async (req, res) => {
   const settings = await Settings.findOne();
   const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
+  if (req.query.term) filter.term = req.query.term;
   if (req.query.classId) filter.classId = req.query.classId;
   if (req.query.studentId) filter.student = req.query.studentId;
   if (req.query.date) {
@@ -280,6 +281,7 @@ router.post(
     try {
       const { classId, date, records } = req.body; // records: [{student, status}]
       const settings = await Settings.findOne();
+      const term = currentTermString(settings) || "";
       const d = new Date(date);
       const results = [];
       for (const r of records) {
@@ -298,6 +300,7 @@ router.post(
             status: r.status,
             markedBy: req.user._id,
             academicYear: settings?.academicYear || "",
+            term,
           },
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );

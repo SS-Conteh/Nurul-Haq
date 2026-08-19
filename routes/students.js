@@ -81,13 +81,13 @@ async function enrichStudent(studentDoc, scopeClassId) {
 // on). Leave undefined for a mixed-class listing, where each student is
 // scored against their OWN current classId so a promoted student's old
 // class average never bleeds into their new class (or vice-versa).
-async function enrichStudentsBatch(studentDocs, scopeClassId) {
+async function enrichStudentsBatch(studentDocs, scopeClassId, term) {
   const ids = studentDocs.map((s) => s._id);
   if (!ids.length) return [];
 
   const [gradeStats, attStats] = await Promise.all([
     Grade.aggregate([
-      { $match: { student: { $in: ids } } },
+      { $match: { student: { $in: ids }, ...(term ? { term } : {}) } },
       {
         $group: {
           _id: { student: "$student", classId: "$classId" },
@@ -97,7 +97,7 @@ async function enrichStudentsBatch(studentDocs, scopeClassId) {
       },
     ]),
     Attendance.aggregate([
-      { $match: { student: { $in: ids } } },
+      { $match: { student: { $in: ids }, ...(term ? { term } : {}) } },
       {
         $group: {
           _id: { student: "$student", classId: "$classId" },
@@ -249,9 +249,17 @@ router.get(
     // classId filter — a mixed, org-wide listing) each student is scored
     // against their own current class only, never their whole history.
     const scopeClassId = req.query.classId || undefined;
-    const enrichedCurrent = await enrichStudentsBatch(students, scopeClassId);
+    // Optional further narrowing to one term (e.g. the admin Dashboard's
+    // Class Performance term dropdown) — on top of, not instead of, the
+    // class scoping above. Omitted -> every term on file, same as today.
+    const termParam = req.query.term || undefined;
+    const enrichedCurrent = await enrichStudentsBatch(
+      students,
+      scopeClassId,
+      termParam,
+    );
     const enrichedAlumni = alumni.length
-      ? (await enrichStudentsBatch(alumni, scopeClassId)).map((s) => ({
+      ? (await enrichStudentsBatch(alumni, scopeClassId, termParam)).map((s) => ({
           ...s,
           isAlumnus: true,
         }))
@@ -431,12 +439,14 @@ router.post(
   },
 );
 
-// PUT /api/students/:id - admin, juniorAdmin, or teacher. The Principal can
-// view students but never edits one.
+// PUT /api/students/:id - admin or juniorAdmin only. Neither the
+// Principal nor a Class Master/teacher may edit a student's record — a
+// student's own information is enrollment/admin-office data, not
+// something the class they're in should be able to change.
 router.put(
   "/:id",
   protect,
-  authorize("teacher", "juniorAdmin", "admin"),
+  authorize("juniorAdmin", "admin"),
   async (req, res) => {
     try {
       const body = { ...req.body };

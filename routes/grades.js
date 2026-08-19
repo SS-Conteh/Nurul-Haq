@@ -3,20 +3,14 @@ const Grade = require("../models/Grade");
 const User = require("../models/User");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
-const { yearFilter } = require("../utils/academicYear");
+const { yearFilter, currentTermString } = require("../utils/academicYear");
 
 const router = express.Router();
 
-// Builds the exact term string a NEW grade must carry, straight off
-// whatever's currently set in Settings — e.g. currentTerm "Term 2" +
-// academicYear "2025/2026" -> "Term 2 · 2026". Returns null if either
-// piece hasn't been set yet, which callers treat as "grading is locked
-// until an Admin sets the current term".
-function expectedCurrentTermString(settings) {
-  if (!settings?.currentTerm || !settings?.academicYear) return null;
-  const yearPart = settings.academicYear.split("/")[1] || settings.academicYear;
-  return `${settings.currentTerm} · ${yearPart}`;
-}
+// Grading is locked to the current term for a teacher's first-time
+// submission — see the POST / handler below. Kept as a local alias so the
+// rest of this file's comments/call sites don't need to change.
+const expectedCurrentTermString = currentTermString;
 
 // GET /api/grades?studentId=&classId=&term=&subject=&ay=
 router.get("/", protect, async (req, res) => {
