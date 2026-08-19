@@ -3,6 +3,7 @@ const Notice = require("../models/Notice");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { currentTermString } = require("../utils/term");
 const router = express.Router();
 
 // GET /api/notices?ay= — category-gated by role:
@@ -17,6 +18,7 @@ router.get("/", protect, async (req, res) => {
     clearedBy: { $ne: req.user._id },
     ...yearFilter(settings?.academicYear, req.query.ay),
   };
+  if (req.query.term) filter.term = req.query.term;
   if (req.user.role === "student") {
     filter.category = "students";
   } else if (req.user.role === "teacher") {
@@ -38,6 +40,7 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
     ...req.body,
     postedBy: req.user._id,
     academicYear: settings?.academicYear || "",
+    term: currentTermString(settings),
   });
   res.status(201).json({ notice });
 });

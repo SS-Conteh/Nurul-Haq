@@ -431,12 +431,14 @@ router.post(
   },
 );
 
-// PUT /api/students/:id - admin, juniorAdmin, or teacher. The Principal can
-// view students but never edits one.
+// PUT /api/students/:id - admin or juniorAdmin only. A Class Master can
+// enroll a new student into their class (see POST above), but cannot edit
+// an existing student's details — nor can the Principal, who's view-only
+// for students entirely.
 router.put(
   "/:id",
   protect,
-  authorize("teacher", "juniorAdmin", "admin"),
+  authorize("juniorAdmin", "admin"),
   async (req, res) => {
     try {
       const body = { ...req.body };

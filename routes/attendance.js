@@ -7,6 +7,7 @@ const DailyQRCode = require("../models/DailyQRCode");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { currentTermString } = require("../utils/term");
 
 const router = express.Router();
 
@@ -234,6 +235,7 @@ router.get("/", protect, async (req, res) => {
   const filter = { ...yearFilter(settings?.academicYear, req.query.ay) };
   if (req.query.classId) filter.classId = req.query.classId;
   if (req.query.studentId) filter.student = req.query.studentId;
+  if (req.query.term) filter.term = req.query.term;
   if (req.query.date) {
     const d = new Date(req.query.date);
     const next = new Date(d);
@@ -298,6 +300,7 @@ router.post(
             status: r.status,
             markedBy: req.user._id,
             academicYear: settings?.academicYear || "",
+            term: currentTermString(settings),
           },
           { upsert: true, new: true, setDefaultsOnInsert: true },
         );
