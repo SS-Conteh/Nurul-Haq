@@ -13,17 +13,8 @@ router.get("/profile", protect, async (req, res) => {
   res.json({ user: user.toSafeObject() });
 });
 
-// PUT /api/users/profile - edit own profile. A student's own profile is
-// maintained by the school (Class Master / Admin, via the Students page),
-// not the student — mirrors the frontend, which never shows a student an
-// Edit control at all, but enforced here too so it can't be bypassed by
-// calling this endpoint directly.
+// PUT /api/users/profile - edit own profile
 router.put("/profile", protect, async (req, res) => {
-  if (req.user.role === "student") {
-    return res
-      .status(403)
-      .json({ message: "Students cannot edit their own profile" });
-  }
   try {
     const allowed = [
       "name",

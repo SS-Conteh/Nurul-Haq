@@ -61,13 +61,7 @@ router.get("/", protect, async (req, res) => {
     // toward the CURRENT year's average until they age out). Without this,
     // the dashboard's average kept blending every year's grades together
     // forever, so it never visibly "reset" when a new academic year began.
-    const gradeYearMatch = {
-      ...yearFilter(settings?.academicYear, requestedYear),
-      // Optional further narrowing to one specific term (nav-level term
-      // dropdown) — left off entirely shows every term in the selected
-      // year, exactly as before this existed.
-      ...(req.query.term ? { term: req.query.term } : {}),
-    };
+    const gradeYearMatch = yearFilter(settings?.academicYear, requestedYear);
 
     const [
       teacherCount,
@@ -198,9 +192,6 @@ router.get("/", protect, async (req, res) => {
           subject: { $in: req.user.subjects },
           student: { $in: scopeStudents.map((s) => s._id) },
           ...yearFilter(settings?.academicYear, requestedYear),
-          // Optional further narrowing to one specific term (nav-level
-          // term dropdown) — left off shows every term in the year.
-          ...(req.query.term ? { term: req.query.term } : {}),
         })
           .select("total")
           .lean()
