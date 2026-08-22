@@ -57,17 +57,6 @@ async function run() {
     BankTransaction.deleteMany({}),
   ]);
 
-  console.log("Creating principal account...");
-  const principal = await User.create({
-    name: "Santos Simon Conteh",
-    password: "Santos0039",
-    role: "principal",
-    phone: "033230039",
-    initials: "SSC",
-    color: C.accent,
-    gender: "Male",
-  });
-
   console.log("Creating default General Admin account...");
   const admin = await User.create({
     name: "Sylvanus Sesay",
@@ -83,9 +72,6 @@ async function run() {
   await Settings.create({});
 
   console.log("\n✅ System is empty and ready.\n");
-  console.log("Principal login:");
-  console.log(`  Phone    : ${principal.phone}`);
-  console.log(`  Password : Santos0039`);
   console.log("\nGeneral Admin login:");
   console.log(`  Phone    : ${admin.phone}`);
   console.log(`  Password : admin123`);
