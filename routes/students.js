@@ -158,25 +158,32 @@ router.get(
   async (req, res) => {
     const filter = { role: "student" };
     if (req.user.role === "teacher") {
-      // A teacher may only ever see students in classes they actually teach
-      // (their own classesTaught) or their own class-master class.
-      const scope = [
-        ...(req.user.classesTaught || []),
+      // A Class Master is scoped strictly to the class(es) they master on
+      // this Students page. A class-master who is also a subject teacher
+      // must not see students from their other taught classes here.
+      const masterScope = [
         ...(req.user.classMasterOf || []),
         ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
       ].map(String);
-      if (req.query.classId) {
-        filter.classId = scope.includes(String(req.query.classId))
-          ? req.query.classId
-          : null; // asked for a class outside their scope -> no results
-      } else if ((req.user.classMasterOf || []).length) {
-        filter.classId = req.user.classMasterOf[0]; // default: first master class
-      } else if (req.user.classTeacherOf) {
-        filter.classId = req.user.classTeacherOf; // legacy default
-      } else if (scope.length) {
-        filter.classId = { $in: scope };
+      if (masterScope.length) {
+        if (req.query.classId) {
+          filter.classId = masterScope.includes(String(req.query.classId))
+            ? req.query.classId
+            : null;
+        } else {
+          filter.classId = { $in: masterScope };
+        }
       } else {
-        filter.classId = null; // not assigned to any class yet
+        const scope = (req.user.classesTaught || []).map(String);
+        if (req.query.classId) {
+          filter.classId = scope.includes(String(req.query.classId))
+            ? req.query.classId
+            : null;
+        } else if (scope.length) {
+          filter.classId = { $in: scope };
+        } else {
+          filter.classId = null;
+        }
       }
     } else if (req.query.classId) {
       filter.classId = req.query.classId;
@@ -281,6 +288,11 @@ router.get(
   protect,
   authorize("teacher", "juniorAdmin", "admin"),
   async (req, res) => {
+    if (req.user.role === "teacher" && (req.user.classMasterOf?.length || req.user.classTeacherOf)) {
+      return res.status(403).json({
+        message: "Class Masters cannot enroll students.",
+      });
+    }
     res.json({ admissionNo: await generateNextAdmissionNo() });
   },
 );
@@ -295,6 +307,20 @@ router.get("/:id", protect, async (req, res) => {
     role: "student",
   }).populate("classId", "name level classGroup");
   if (!student) return res.status(404).json({ message: "Student not found" });
+
+  if (req.user.role === "teacher") {
+    const masterScope = [
+      ...(req.user.classMasterOf || []),
+      ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+    ].map(String);
+    const scope = masterScope.length
+      ? masterScope
+      : (req.user.classesTaught || []).map(String);
+    if (!student.classId || !scope.includes(String(student.classId._id || student.classId))) {
+      return res.status(403).json({ message: "You can only view students in your assigned class scope." });
+    }
+  }
+
   res.json({
     student: await enrichStudent(student, req.query.classId || undefined),
   });
@@ -392,6 +418,12 @@ router.post(
         avatarUrl,
         house,
       } = req.body;
+
+      if (req.user.role === "teacher" && (req.user.classMasterOf?.length || req.user.classTeacherOf)) {
+        return res.status(403).json({
+          message: "Class Masters cannot enroll students. Please ask an Admin to enroll the student.",
+        });
+      }
 
       if (req.user.role === "juniorAdmin" && classId) {
         const SchoolClass = require("../models/SchoolClass");
