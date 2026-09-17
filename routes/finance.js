@@ -26,7 +26,7 @@ const feePopulate = {
 };
 
 // Looks up the ANNUAL required fee for a student's level (Nursery/Primary/
-// JSS/SSS) from Settings.feeAmounts, then derives Paid/Partial/Unpaid from
+// JSS/SSS) from the class fee configuration, then derives Paid/Partial/Unpaid from
 // the student's cumulative payments for the current academic year — this
 // installment plus every other one already on file (excluding, on an edit,
 // the record being edited itself, so it isn't counted twice). Used by both

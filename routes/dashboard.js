@@ -141,8 +141,13 @@ router.get("/", protect, async (req, res) => {
     const requestedYear = req.query.ay || "";
     const viewingPastYear = !!requestedYear;
 
-    const classId = req.user.classTeacherOf;
-    const isClassMaster = !!classId;
+    const masterClassIds = [...new Set([
+      ...(req.user.classMasterOf || []),
+      ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+    ].map(String))];
+    const requestedClassId = req.query.classId && masterClassIds.includes(String(req.query.classId)) ? req.query.classId : null;
+    const classId = requestedClassId || masterClassIds[0] || null;
+    const isClassMaster = masterClassIds.length > 0;
 
     // "Own subject" scope: every class this teacher actually teaches, plus
     // their own class-master class if that's separate.
@@ -150,7 +155,7 @@ router.get("/", protect, async (req, res) => {
       ...new Set(
         [
           ...(req.user.classesTaught || []),
-          ...(classId ? [classId] : []),
+          ...(masterClassIds),
         ].map(String),
       ),
     ];

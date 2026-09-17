@@ -162,14 +162,17 @@ router.get(
       // (their own classesTaught) or their own class-master class.
       const scope = [
         ...(req.user.classesTaught || []),
+        ...(req.user.classMasterOf || []),
         ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
       ].map(String);
       if (req.query.classId) {
         filter.classId = scope.includes(String(req.query.classId))
           ? req.query.classId
           : null; // asked for a class outside their scope -> no results
+      } else if ((req.user.classMasterOf || []).length) {
+        filter.classId = req.user.classMasterOf[0]; // default: first master class
       } else if (req.user.classTeacherOf) {
-        filter.classId = req.user.classTeacherOf; // default: their own class
+        filter.classId = req.user.classTeacherOf; // legacy default
       } else if (scope.length) {
         filter.classId = { $in: scope };
       } else {

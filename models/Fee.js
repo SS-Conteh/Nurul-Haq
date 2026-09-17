@@ -21,7 +21,7 @@ const FeeSchema = new mongoose.Schema(
     // recorded, so a new school year's fee tracking starts clean instead
     // of mixing with (or being blocked by) last year's payments.
     academicYear: { type: String, default: "" },
-    // The student's level fee for the FULL ACADEMIC YEAR (Settings.feeAmounts)
+    // The student's level fee for the FULL ACADEMIC YEAR (the class fee configuration)
     // at the moment this payment was recorded — status below is computed by
     // comparing the student's cumulative payments for the year (this record
     // plus every other installment already on file) against this figure.

@@ -9,6 +9,7 @@ router.get("/profile", protect, async (req, res) => {
   const user = await User.findById(req.user._id)
     .populate("classId", "name")
     .populate("classTeacherOf", "name subjects level classGroup")
+    .populate("classMasterOf", "name subjects level classGroup")
     .populate("classesTaught", "name level classGroup subjects");
   res.json({ user: user.toSafeObject() });
 });

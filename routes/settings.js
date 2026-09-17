@@ -165,8 +165,8 @@ router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
     if (!LEVELS.includes(level)) {
       return res.status(400).json({ message: "Pick a valid level" });
     }
-    if (!classGroup && !className) {
-      return res.status(400).json({ message: "Pick a class to set the fee for" });
+    if (!className) {
+      return res.status(400).json({ message: "Pick a registered class to set the fee for" });
     }
     if (!Number.isFinite(amount) || amount < 0) {
       return res.status(400).json({ message: "Enter a valid fee amount" });
@@ -196,8 +196,7 @@ router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
   }
 });
 
-// DELETE /api/settings/class-fee — clear one class's fee, so it falls back
-// to its level's default figure again. Nothing else is touched.
+// DELETE /api/settings/class-fee — clear one class's fee. Nothing else is touched.
 router.delete("/class-fee", protect, authorize("admin"), async (req, res) => {
   const { level = "", classGroup = "", className = "" } = req.query;
   let settings = await Settings.findOne();

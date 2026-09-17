@@ -63,6 +63,7 @@ router.post("/login/staff", async (req, res) => {
     await user.populate([
       { path: "classId", select: "name" },
       { path: "classTeacherOf", select: "name subjects level classGroup" },
+      { path: "classMasterOf", select: "name subjects level classGroup" },
       { path: "classesTaught", select: "name level classGroup subjects" },
     ]);
     const token = signToken(user._id);
@@ -126,6 +127,8 @@ router.post("/signup/teacher", async (req, res) => {
       subjects,
       teacherRole,
       level,
+      levelsTaught,
+      classMasterOf,
       classTeacherOf,
       classesTaught,
       phone,
@@ -167,9 +170,11 @@ router.post("/signup/teacher", async (req, res) => {
       role: "teacher",
       subjects: subjects || [],
       teacherRole,
-      level,
-      classTeacherOf: classTeacherOf || undefined,
-      classesTaught: classesTaught || [],
+      level: (levelsTaught || [level || ""])[0] || "",
+      levelsTaught: [...new Set((levelsTaught || (level ? [level] : [])).filter(Boolean))],
+      classMasterOf: teacherRole === "Class Master" ? [...new Set((classMasterOf || (classTeacherOf ? [classTeacherOf] : [])).filter(Boolean))] : [],
+      classTeacherOf: teacherRole === "Class Master" ? (classMasterOf?.[0] || classTeacherOf || undefined) : undefined,
+      classesTaught: [...new Set((classesTaught || []).filter(Boolean))],
       phone,
       gender,
       dob,
@@ -199,6 +204,7 @@ router.get("/me", protect, async (req, res) => {
   await req.user.populate([
     { path: "classId", select: "name" },
     { path: "classTeacherOf", select: "name subjects level classGroup" },
+      { path: "classMasterOf", select: "name subjects level classGroup" },
     { path: "classesTaught", select: "name level classGroup subjects" },
   ]);
   res.json({ user: req.user.toSafeObject() });

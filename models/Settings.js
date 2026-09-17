@@ -62,31 +62,8 @@ const SettingsSchema = new mongoose.Schema(
     bankOpeningBalance: { type: Number, default: null },
     bankOpeningBalanceSetAt: { type: Date, default: null },
     bankOpeningBalanceSetBy: { type: String, default: "" },
-    // The TOTAL fee a student owes for the whole academic year (not per
-    // term), set once per level by the Principal or General Admin. A
-    // student can pay this off however they like — in termly installments
-    // or as a single lump sum — and every fee payment's Paid/Partial/Unpaid
-    // status is derived from comparing what a student has paid so far this
-    // academic year, in total, against their level's figure here — see
-    // routes/finance.js.
-    feeAmounts: {
-      Nursery: { type: Number, default: 0 },
-      Primary: { type: Number, default: 0 },
-      JSS: { type: Number, default: 0 },
-      SSS: { type: Number, default: 0 },
-    },
-    // PER-CLASS annual fees — the newer, more granular version of
-    // feeAmounts above. Each entry is one rule:
-    //   { level, classGroup, className, amount }
-    // A rule with a className applies to that one registered class only
-    // ("SSS 1 Art"); a rule with only a classGroup applies to every section
-    // in that group ("Class 1" → "Class 1A", "Class 1B"). Set from
-    // Settings → Fee Structure by Class (level dropdown → class dropdown →
-    // amount → save), and read EXCLUSIVELY through
-    // utils/fees.js resolveRequiredFee(), which falls back to the level
-    // figure in feeAmounts when a class has no rule of its own — so a
-    // school that never touches this screen keeps behaving exactly as it
-    // did before.
+    // PER-CLASS annual fees. Each entry belongs to one registered class.
+    // No level-wide fallback is used.
     classFees: {
       type: [
         {

@@ -6,37 +6,43 @@ const { protect, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Keeps SchoolClass.classTeacher pointed at whichever teacher currently has
-// that class in User.classTeacherOf — the two fields describe the same
-// relationship from either side and must never disagree.
-async function syncClassMaster(teacherId, oldClassId, newClassId) {
-  const oldId = oldClassId ? String(oldClassId) : null;
-  const newId = newClassId ? String(newClassId) : null;
-  if (oldId && oldId !== newId) {
-    // Only clear the old class's master if it still points at THIS teacher
-    // (avoids clobbering someone else who may have since taken it over).
-    await SchoolClass.updateOne(
-      { _id: oldId, classTeacher: teacherId },
-      { $unset: { classTeacher: "" } },
-    );
+// Keep SchoolClass.classTeacher as a backwards-compatible pointer to the
+// teacher assigned as master. The authoritative multi-class relationship is
+// User.classMasterOf. Each class still has at most one master.
+async function syncClassMasters(teacherId, oldClassIds = [], newClassIds = []) {
+  const oldIds = [...new Set((oldClassIds || []).map(String))];
+  const newIds = [...new Set((newClassIds || []).map(String))];
+  const removed = oldIds.filter((id) => !newIds.includes(id));
+  for (const id of removed) {
+    await SchoolClass.updateOne({ _id: id, classTeacher: teacherId }, { $unset: { classTeacher: "" } });
   }
-  if (newId) {
-    // Exactly one Class Master per class: whoever previously held this
-    // class is demoted back to a plain Subject Teacher.
-    const previousMaster = await User.findOne({
-      classTeacherOf: newId,
+  for (const id of newIds) {
+    const previousMasters = await User.find({
+      $or: [{ classMasterOf: id }, { classTeacherOf: id }],
       _id: { $ne: teacherId },
+      role: "teacher",
     });
-    if (previousMaster) {
-      previousMaster.classTeacherOf = undefined;
-      previousMaster.teacherRole = "Subject Teacher";
-      await previousMaster.save();
+    for (const previous of previousMasters) {
+      previous.classMasterOf = (previous.classMasterOf || []).filter((x) => String(x) !== id);
+      if (previous.classTeacherOf && String(previous.classTeacherOf) === id) previous.classTeacherOf = previous.classMasterOf[0] || null;
+      if (!previous.classMasterOf.length) previous.teacherRole = "Subject Teacher";
+      await previous.save();
     }
-    await SchoolClass.updateOne(
-      { _id: newId },
-      { $set: { classTeacher: teacherId } },
-    );
+    await SchoolClass.updateOne({ _id: id }, { $set: { classTeacher: teacherId } });
   }
+}
+
+function normalizeTeacherAssignments(body = {}) {
+  const classMasterOf = Array.isArray(body.classMasterOf)
+    ? body.classMasterOf.filter(Boolean)
+    : (body.classTeacherOf ? [body.classTeacherOf] : []);
+  const classesTaught = Array.isArray(body.classesTaught) ? body.classesTaught.filter(Boolean) : [];
+  const levelsTaught = Array.isArray(body.levelsTaught) ? body.levelsTaught.filter(Boolean) : [];
+  return {
+    classMasterOf: [...new Set(classMasterOf)],
+    classesTaught: [...new Set(classesTaught)],
+    levelsTaught: [...new Set(levelsTaught)],
+  };
 }
 
 // GET /api/teachers?level=Primary&teacherRole=Class%20Master
@@ -44,14 +50,17 @@ async function syncClassMaster(teacherId, oldClassId, newClassId) {
 // Principal's approval live in /pending instead.
 router.get("/", protect, async (req, res) => {
   const filter = { role: "teacher", approvalStatus: { $ne: "Pending" } };
-  if (req.query.level) filter.level = req.query.level;
+  if (req.query.level) filter.$or = [{ levelsTaught: req.query.level }, { level: req.query.level }];
   if (req.query.teacherRole) filter.teacherRole = req.query.teacherRole;
   // Junior School Admin (Nursery-JSS) never sees SSS-level teachers.
   if (req.user.role === "juniorAdmin") {
-    filter.level = filter.level && filter.level !== "SSS" ? filter.level : { $in: ["Nursery", "Primary", "JSS", ""] };
+    if (req.query.level === "SSS") return res.json({ teachers: [], count: 0 });
+    if (req.query.level) filter.$or = [{ levelsTaught: req.query.level }, { level: req.query.level }];
+    else filter.levelsTaught = { $in: ["Nursery", "Primary", "JSS"] };
   }
   const teachers = await User.find(filter)
     .populate("classTeacherOf", "name level classGroup")
+    .populate("classMasterOf", "name level classGroup")
     .populate("classesTaught", "name level classGroup")
     .sort("name");
   res.json({
@@ -66,10 +75,11 @@ router.get("/", protect, async (req, res) => {
 router.get("/pending", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const pendingFilter = { role: "teacher", approvalStatus: "Pending" };
   if (req.user.role === "juniorAdmin") {
-    pendingFilter.level = { $in: ["Nursery", "Primary", "JSS", ""] };
+    pendingFilter.levelsTaught = { $in: ["Nursery", "Primary", "JSS"] };
   }
   const pending = await User.find(pendingFilter)
     .populate("classTeacherOf", "name level classGroup")
+    .populate("classMasterOf", "name level classGroup")
     .populate("classesTaught", "name level classGroup")
     .sort("-createdAt");
   res.json({
@@ -97,8 +107,8 @@ router.post(
       }
       teacher.approvalStatus = "Approved";
       await teacher.save();
-      if (teacher.teacherRole === "Class Master" && teacher.classTeacherOf) {
-        await syncClassMaster(teacher._id, null, teacher.classTeacherOf);
+      if (teacher.teacherRole === "Class Master") {
+        await syncClassMasters(teacher._id, [], teacher.classMasterOf?.length ? teacher.classMasterOf : (teacher.classTeacherOf ? [teacher.classTeacherOf] : []));
       }
       res.json({ teacher: teacher.toSafeObject() });
     } catch (err) {
@@ -133,6 +143,7 @@ router.get("/:id", protect, async (req, res) => {
     role: "teacher",
   })
     .populate("classTeacherOf", "name level classGroup")
+    .populate("classMasterOf", "name level classGroup")
     .populate("classesTaught", "name level classGroup");
   if (!teacher) return res.status(404).json({ message: "Teacher not found" });
   res.json({ teacher: teacher.toSafeObject() });
@@ -149,6 +160,8 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
       subjects,
       teacherRole,
       level,
+      levelsTaught,
+      classMasterOf,
       classTeacherOf,
       classesTaught,
       phone,
@@ -159,7 +172,7 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
       shift,
       avatarUrl,
     } = req.body;
-    if (req.user.role === "juniorAdmin" && level === "SSS") {
+    if (req.user.role === "juniorAdmin" && (Array.isArray(levelsTaught) ? levelsTaught : [level]).includes("SSS")) {
       return res.status(403).json({
         message: "A Junior School Admin cannot add an SSS-level teacher",
       });
@@ -170,15 +183,18 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
       .slice(0, 2)
       .join("")
       .toUpperCase();
+    const normalized = normalizeTeacherAssignments({ levelsTaught, classesTaught, classMasterOf, classTeacherOf });
     const teacher = await User.create({
       name,
       password: password || "teacher123",
       role: "teacher",
       subjects: subjects || [],
       teacherRole,
-      level,
-      classTeacherOf: classTeacherOf || undefined,
-      classesTaught: classesTaught || [],
+      level: normalized.levelsTaught[0] || level || "",
+      levelsTaught: normalized.levelsTaught,
+      classMasterOf: normalized.classMasterOf,
+      classTeacherOf: normalized.classMasterOf[0] || undefined,
+      classesTaught: normalized.classesTaught,
       phone,
       gender,
       dob,
@@ -192,8 +208,8 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
       ],
       approvalStatus: "Approved",
     });
-    if (teacherRole === "Class Master" && classTeacherOf) {
-      await syncClassMaster(teacher._id, null, classTeacherOf);
+    if (teacherRole === "Class Master") {
+      await syncClassMasters(teacher._id, [], normalized.classMasterOf);
     }
     res.status(201).json({ teacher: teacher.toSafeObject() });
   } catch (err) {
@@ -207,27 +223,24 @@ router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) 
   try {
     const existing = await User.findOne({ _id: req.params.id, role: "teacher" });
     if (!existing) return res.status(404).json({ message: "Teacher not found" });
-    if (req.user.role === "juniorAdmin" && (existing.level === "SSS" || req.body.level === "SSS")) {
-      return res.status(403).json({
-        message: "A Junior School Admin cannot manage an SSS-level teacher",
-      });
+    const incomingLevels = Array.isArray(req.body.levelsTaught) ? req.body.levelsTaught : (req.body.level ? [req.body.level] : (existing.levelsTaught || []));
+    if (req.user.role === "juniorAdmin" && ((existing.levelsTaught || []).includes("SSS") || incomingLevels.includes("SSS"))) {
+      return res.status(403).json({ message: "A Junior School Admin cannot manage an SSS-level teacher" });
     }
 
     const body = { ...req.body };
-    // A teacher is only ever a Class Master of a class when both the role
-    // AND the class are explicitly set — anything else means "not a master
-    // of anything", and that has to actually clear the field, not just
-    // leave the old value sitting there stale.
-    if (body.teacherRole !== "Class Master" || !body.classTeacherOf) {
-      body.classTeacherOf = null;
-    }
-    if (!body.classesTaught) delete body.classesTaught;
+    const normalized = normalizeTeacherAssignments(body);
+    body.levelsTaught = normalized.levelsTaught;
+    body.level = normalized.levelsTaught[0] || "";
+    body.classesTaught = normalized.classesTaught;
+    body.classMasterOf = body.teacherRole === "Class Master" ? normalized.classMasterOf : [];
+    body.classTeacherOf = body.classMasterOf[0] || null;
     if (!body.password) delete body.password;
 
-    const oldClassId = existing.classTeacherOf;
+    const oldClassIds = existing.classMasterOf?.length ? existing.classMasterOf : (existing.classTeacherOf ? [existing.classTeacherOf] : []);
     Object.assign(existing, body);
     const teacher = await existing.save();
-    await syncClassMaster(teacher._id, oldClassId, teacher.classTeacherOf);
+    await syncClassMasters(teacher._id, oldClassIds, teacher.classMasterOf || []);
     res.json({ teacher: teacher.toSafeObject() });
   } catch (err) {
     res.status(400).json({ message: err.message });
@@ -247,7 +260,7 @@ router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, re
     role: "teacher",
   });
   if (!teacher) return res.status(404).json({ message: "Teacher not found" });
-  await SchoolClass.updateOne(
+  await SchoolClass.updateMany(
     { classTeacher: teacher._id },
     { $unset: { classTeacher: "" } },
   );

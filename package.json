@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node seed/seed.js"
+    "seed": "node seed/seed.js",
+    "migrate:teacher-assignments": "node scripts/migrateTeacherAssignments.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

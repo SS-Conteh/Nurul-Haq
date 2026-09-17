@@ -67,17 +67,20 @@ const UserSchema = new mongoose.Schema(
       enum: ["Subject Teacher", "Class Master", ""],
       default: "",
     },
+    // Legacy single-level field kept for backwards compatibility. New records use levelsTaught.
     level: {
       type: String,
       enum: ["Nursery", "Primary", "JSS", "SSS", ""],
       default: "",
     },
-    // Classes a Subject Teacher teaches (can be several)
+    // Levels and classes a teacher is assigned to. A teacher may span any number
+    // of levels/classes (e.g. JSS + SSS, or JSS 2 + SSS 1 Art).
+    levelsTaught: { type: [String], enum: ["Nursery", "Primary", "JSS", "SSS"], default: [] },
     classesTaught: [{ type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" }],
-    classTeacherOf: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "SchoolClass",
-    },
+    // New multi-class class-master relationship. classTeacherOf is retained as
+    // a legacy compatibility field pointing at the first master class.
+    classMasterOf: [{ type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" }],
+    classTeacherOf: { type: mongoose.Schema.Types.ObjectId, ref: "SchoolClass" },
     // Shift a teacher normally works — used for QR attendance
     shift: { type: String, enum: ["Morning", "Afternoon", ""], default: "" },
 
@@ -106,6 +109,8 @@ const UserSchema = new mongoose.Schema(
 UserSchema.index({ role: 1 });
 UserSchema.index({ classId: 1 });
 UserSchema.index({ role: 1, classId: 1 });
+UserSchema.index({ classMasterOf: 1 });
+UserSchema.index({ classesTaught: 1 });
 
 UserSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();

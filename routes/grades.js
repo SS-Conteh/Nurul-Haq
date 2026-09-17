@@ -58,16 +58,14 @@ router.get("/", protect, async (req, res) => {
   // for the students in their own class.
   if (req.user.role === "teacher") {
     const ownSubjects = req.user.subjects || [];
-    const ownClassId = req.user.classTeacherOf
-      ? String(req.user.classTeacherOf)
-      : null;
+    const ownClassIds = [...new Set([
+      ...(req.user.classesTaught || []),
+      ...(req.user.classMasterOf || []),
+      ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+    ].map(String))];
     const scopeOr = [];
-    if (ownSubjects.length) scopeOr.push({ subject: { $in: ownSubjects } });
-    if (ownClassId) {
-      // Grades actually recorded while a student was in this teacher's
-      // class — not just whichever students happen to be in it today.
-      scopeOr.push({ classId: ownClassId });
-    }
+    if (ownSubjects.length) scopeOr.push({ subject: { $in: ownSubjects }, classId: { $in: ownClassIds } });
+    if (ownClassIds.length) scopeOr.push({ classId: { $in: ownClassIds } });
     if (!scopeOr.length) return res.json({ grades: [] });
 
     const grades = await Grade.find({ $and: [filter, { $or: scopeOr }] })
@@ -96,14 +94,21 @@ router.post(
   async (req, res) => {
     try {
       const { student, subject, term, test, examScore, remark, position } = req.body;
-      if (
-        req.user.role === "teacher" &&
-        (req.user.subjects || []).length &&
-        !req.user.subjects.includes(subject)
-      ) {
-        return res
-          .status(403)
-          .json({ message: "You can only submit grades for your own subject(s)" });
+      let studentDocForAuthorization = null;
+      if (req.user.role === "teacher") {
+        studentDocForAuthorization = await User.findById(student).select("classId");
+        const allowedClassIds = new Set([
+          ...(req.user.classesTaught || []),
+          ...(req.user.classMasterOf || []),
+          ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+        ].map(String));
+        if (!studentDocForAuthorization?.classId || !allowedClassIds.has(String(studentDocForAuthorization.classId))) {
+          return res.status(403).json({ message: "You can only submit grades for classes assigned to you." });
+        }
+        const masterIds = new Set((req.user.classMasterOf || []).map(String));
+        if (!masterIds.has(String(studentDocForAuthorization.classId)) && req.user.subjects?.length && !req.user.subjects.includes(subject)) {
+          return res.status(403).json({ message: "You can only submit grades for your own subject(s) unless you are the Class Master of that class." });
+        }
       }
       // A teacher may only ever grade the term the school is CURRENTLY on —
       // never a term of their own choosing. This is what makes the term set

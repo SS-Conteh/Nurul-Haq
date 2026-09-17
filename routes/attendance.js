@@ -245,8 +245,13 @@ router.get("/", protect, async (req, res) => {
   if (req.user.role === "teacher") {
     // Only a Class Master may see student attendance records, and only for
     // their own class — a plain subject teacher has no access here at all.
-    if (!req.user.classTeacherOf) return res.json({ records: [] });
-    filter.classId = req.user.classTeacherOf;
+    const allowedClassIds = [...new Set([
+      ...(req.user.classMasterOf || []),
+      ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+    ].map(String))];
+    if (!allowedClassIds.length) return res.json({ records: [] });
+    if (req.query.classId && allowedClassIds.includes(String(req.query.classId))) filter.classId = req.query.classId;
+    else filter.classId = allowedClassIds[0];
   }
 
   const records = await Attendance.find(filter)
@@ -280,6 +285,15 @@ router.post(
   async (req, res) => {
     try {
       const { classId, date, records } = req.body; // records: [{student, status}]
+      if (req.user.role === "teacher") {
+        const allowedClassIds = new Set([
+          ...(req.user.classMasterOf || []),
+          ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+        ].map(String));
+        if (!allowedClassIds.has(String(classId))) {
+          return res.status(403).json({ message: "You can only mark attendance for classes you are a Class Master of." });
+        }
+      }
       const settings = await Settings.findOne();
       const term = currentTermString(settings) || "";
       const d = new Date(date);
