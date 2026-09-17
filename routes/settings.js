@@ -129,4 +129,84 @@ router.put("/", protect, authorize("admin"), async (req, res) => {
   res.json({ settings, isNewYear: !!isNewYear, promotionResults });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// PER-CLASS FEE STRUCTURE
+//
+// Rather than putting the whole classFees array through the generic PUT
+// above (where one stale browser tab could wipe out every other class's
+// figure), each class's fee is saved on its own through these two routes:
+// PUT upserts exactly one rule, DELETE removes exactly one. Everything
+// else in classFees is left untouched, so two admins editing two different
+// classes at the same time can't overwrite each other.
+//
+// A rule is identified by level + classGroup + className. className blank
+// means "the whole class group" (every section in it); className set means
+// that one registered class only. See utils/fees.js for how the two are
+// resolved against each other at read time.
+// ─────────────────────────────────────────────────────────────────────────
+
+const LEVELS = ["Nursery", "Primary", "JSS", "SSS"];
+
+function sameRule(r, level, classGroup, className) {
+  const eq = (a, b) =>
+    String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+  return eq(r.level, level) && eq(r.classGroup, classGroup) && eq(r.className, className);
+}
+
+// PUT /api/settings/class-fee — set (or update) one class's annual fee.
+// General Admin only, same as every other settings write.
+router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
+  try {
+    const level = String(req.body.level || "").trim();
+    const classGroup = String(req.body.classGroup || "").trim();
+    const className = String(req.body.className || "").trim();
+    const amount = Number(req.body.amount);
+
+    if (!LEVELS.includes(level)) {
+      return res.status(400).json({ message: "Pick a valid level" });
+    }
+    if (!classGroup && !className) {
+      return res.status(400).json({ message: "Pick a class to set the fee for" });
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ message: "Enter a valid fee amount" });
+    }
+
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+
+    const rules = [...(settings.classFees || [])];
+    const idx = rules.findIndex((r) => sameRule(r, level, classGroup, className));
+    const rule = {
+      level,
+      classGroup,
+      className,
+      amount,
+      updatedBy: req.user.name,
+      updatedAt: new Date(),
+    };
+    if (idx >= 0) rules[idx] = rule;
+    else rules.push(rule);
+
+    settings.classFees = rules;
+    await settings.save();
+    res.json({ classFees: settings.classFees });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
+// DELETE /api/settings/class-fee — clear one class's fee, so it falls back
+// to its level's default figure again. Nothing else is touched.
+router.delete("/class-fee", protect, authorize("admin"), async (req, res) => {
+  const { level = "", classGroup = "", className = "" } = req.query;
+  let settings = await Settings.findOne();
+  if (!settings) return res.json({ classFees: [] });
+  settings.classFees = (settings.classFees || []).filter(
+    (r) => !sameRule(r, level, classGroup, className),
+  );
+  await settings.save();
+  res.json({ classFees: settings.classFees });
+});
+
 module.exports = router;

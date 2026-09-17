@@ -75,6 +75,37 @@ const SettingsSchema = new mongoose.Schema(
       JSS: { type: Number, default: 0 },
       SSS: { type: Number, default: 0 },
     },
+    // PER-CLASS annual fees — the newer, more granular version of
+    // feeAmounts above. Each entry is one rule:
+    //   { level, classGroup, className, amount }
+    // A rule with a className applies to that one registered class only
+    // ("SSS 1 Art"); a rule with only a classGroup applies to every section
+    // in that group ("Class 1" → "Class 1A", "Class 1B"). Set from
+    // Settings → Fee Structure by Class (level dropdown → class dropdown →
+    // amount → save), and read EXCLUSIVELY through
+    // utils/fees.js resolveRequiredFee(), which falls back to the level
+    // figure in feeAmounts when a class has no rule of its own — so a
+    // school that never touches this screen keeps behaving exactly as it
+    // did before.
+    classFees: {
+      type: [
+        {
+          level: {
+            type: String,
+            enum: ["Nursery", "Primary", "JSS", "SSS"],
+            required: true,
+          },
+          // e.g. "Nursery 1", "Class 3", "JSS 2", "Art"
+          classGroup: { type: String, default: "", trim: true },
+          // e.g. "Class 3B" — blank means the rule covers the whole group
+          className: { type: String, default: "", trim: true },
+          amount: { type: Number, default: 0, min: 0 },
+          updatedBy: { type: String, default: "" },
+          updatedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     preferences: {
       smsNotifications: { type: Boolean, default: true },
       autoCalculateGrades: { type: Boolean, default: true },

@@ -6,6 +6,7 @@ const SchoolClass = require("../models/SchoolClass");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { resolveRequiredFee, feeSourceLabel } = require("../utils/fees");
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -34,11 +35,16 @@ const feePopulate = {
 async function computeFeeStatus(studentId, amount, excludeFeeId = null) {
   const student = await User.findById(studentId).populate({
     path: "classId",
-    select: "level",
+    select: "name level classGroup",
   });
-  const level = student?.classId?.level;
   const settings = await Settings.findOne();
-  const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
+  // Per-CLASS fee first (Settings → Fee Structure by Class), falling back
+  // to the level-wide figure for any class that hasn't been given its own.
+  const requiredFee = resolveRequiredFee(settings, {
+    level: student?.classId?.level,
+    classGroup: student?.classId?.classGroup,
+    name: student?.classId?.name,
+  });
   const academicYear = settings?.academicYear || "";
 
   const otherFilter = { student: studentId, academicYear };
@@ -86,6 +92,57 @@ router.get("/", protect, async (req, res) => {
   res.json({ fees });
 });
 
+// GET /api/finance/my-summary - a single student's own fee position for
+// the current academic year: the annual fee set for THEIR CLASS, what
+// they've paid so far across every installment, and what's left. Computed
+// here rather than in the browser because the client only ever gets a
+// thinly-populated classId (name only) from /auth/me, and because the fee
+// a class owes is resolved through one helper everywhere (utils/fees.js)
+// so a student can never be shown a different figure from the one the
+// bursar sees on the same class.
+router.get("/my-summary", protect, async (req, res) => {
+  const studentId = req.query.studentId && req.user.role !== "student"
+    ? req.query.studentId
+    : req.user._id;
+  const student = await User.findById(studentId).populate({
+    path: "classId",
+    select: "name level classGroup",
+  });
+  const settings = await Settings.findOne();
+  const academicYear = req.query.ay || settings?.academicYear || "";
+  const requiredFee = resolveRequiredFee(settings, {
+    level: student?.classId?.level,
+    classGroup: student?.classId?.classGroup,
+    name: student?.classId?.name,
+  });
+
+  const fees = await Fee.find({ student: studentId, academicYear }).sort("-paidOn");
+  const paidToDate = fees.reduce((s, f) => s + (f.amount || 0), 0);
+  const balance = Math.max(0, requiredFee - paidToDate);
+  const status =
+    paidToDate <= 0
+      ? "Unpaid"
+      : requiredFee > 0 && paidToDate >= requiredFee
+        ? "Paid"
+        : "Partial";
+
+  res.json({
+    requiredFee,
+    paidToDate,
+    balance,
+    status,
+    academicYear,
+    payments: fees,
+    class: student?.classId
+      ? {
+          name: student.classId.name,
+          level: student.classId.level,
+          classGroup: student.classId.classGroup,
+        }
+      : null,
+  });
+});
+
 // GET /api/finance/summary - totals for the finance dashboard. The
 // Principal, General Admin, Junior Admin, and both Bursars can all view
 // this. The Junior Admin deliberately sees the FULL school's totals here
@@ -106,7 +163,7 @@ router.get(
     let fees = await Fee.find({ academicYear }).populate({
       path: "student",
       select: "classId",
-      populate: { path: "classId", select: "level" },
+      populate: { path: "classId", select: "name level classGroup" },
     });
     // Only a Bursar's totals are scoped to their own level — the Junior
     // Admin sees the whole school here for transparency (see comment
@@ -122,7 +179,13 @@ router.get(
     fees.forEach((f) => {
       const sid = String(f.student?._id || f.student);
       if (!byStudent[sid]) {
-        byStudent[sid] = { level: f.student?.classId?.level, total: 0 };
+        byStudent[sid] = {
+          level: f.student?.classId?.level,
+          // Kept alongside the level so each student's required fee can be
+          // resolved against their own CLASS, not just their level.
+          cls: f.student?.classId || null,
+          total: 0,
+        };
       }
       byStudent[sid].total += f.amount || 0;
     });
@@ -133,8 +196,12 @@ router.get(
     let seniorCollected = 0;
     let juniorCollected = 0;
     const totalCount = Object.keys(byStudent).length;
-    Object.values(byStudent).forEach(({ level, total }) => {
-      const requiredFee = (level && settings?.feeAmounts?.[level]) || 0;
+    Object.values(byStudent).forEach(({ level, cls, total }) => {
+      const requiredFee = resolveRequiredFee(settings, {
+        level,
+        classGroup: cls?.classGroup,
+        name: cls?.name,
+      });
       totalCollected += total;
       if (level === "SSS") seniorCollected += total;
       else if (level) juniorCollected += total;
@@ -193,7 +260,16 @@ router.get(
 
     const settings = await Settings.findOne();
     const academicYear = req.query.ay || settings?.academicYear || "";
-    const requiredFee = (cls.level && settings?.feeAmounts?.[cls.level]) || 0;
+    const requiredFee = resolveRequiredFee(settings, {
+      level: cls.level,
+      classGroup: cls.classGroup,
+      name: cls.name,
+    });
+    const feeSource = feeSourceLabel(settings, {
+      level: cls.level,
+      classGroup: cls.classGroup,
+      name: cls.name,
+    });
 
     const fees = await Fee.find({
       student: { $in: studentIds },
@@ -232,6 +308,7 @@ router.get(
         level: cls.level,
         classGroup: cls.classGroup,
         requiredFee,
+        feeSource,
       },
       fullyPaid: rows.filter((r) => r.status === "Paid"),
       notFullyPaid: rows.filter((r) => r.status !== "Paid"),
