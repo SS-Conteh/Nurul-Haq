@@ -409,7 +409,76 @@ router.put(
   },
 );
 
-// DELETE /api/finance/:id - remove a fee payment entered in the current\n// academic year. This is deliberately limited to the same roles that can\n// record/edit fees. The receipt is stored on the Fee document itself, so\n// removing the document also removes its uploaded receipt. After deletion,\n// every remaining payment for the student is recalculated so their running\n// Paid/Partial/Unpaid status cannot become stale.\nrouter.delete(\n  "/:id",\n  protect,\n  authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),\n  async (req, res) => {\n    try {\n      const fee = await Fee.findById(req.params.id);\n      if (!fee) return res.status(404).json({ message: "Fee record not found" });\n\n      const violation = await levelScopeViolation(req.user.role, fee.student);\n      if (violation) return res.status(403).json({ message: violation });\n\n      const settings = await Settings.findOne();\n      const currentAcademicYear = settings?.academicYear || "";\n      if (fee.academicYear && currentAcademicYear && fee.academicYear !== currentAcademicYear) {\n        return res.status(403).json({\n          message: "Payments from a previous academic year cannot be deleted from the archive.",\n        });\n      }\n\n      const studentId = fee.student;\n      await Fee.deleteOne({ _id: fee._id });\n\n      // Rebuild the running status of every remaining payment for this\n      // student/year. This matters when a later installment made the student\n      // fully paid and that installment is now removed.\n      const remaining = await Fee.find({\n        student: studentId,\n        academicYear: fee.academicYear,\n      }).sort({ paidOn: 1, createdAt: 1 });\n\n      const student = await User.findById(studentId).populate({\n        path: "classId",\n        select: "name level classGroup",\n      });\n      const requiredFee = resolveRequiredFee(settings, {\n        level: student?.classId?.level,\n        classGroup: student?.classId?.classGroup,\n        name: student?.classId?.name,\n      });\n\n      let runningTotal = 0;\n      for (const payment of remaining) {\n        runningTotal += payment.amount || 0;\n        payment.expectedAmount = requiredFee;\n        payment.status =\n          runningTotal <= 0\n            ? "Unpaid"\n            : requiredFee > 0 && runningTotal >= requiredFee\n              ? "Paid"\n              : requiredFee > 0\n                ? "Partial"\n                : "Paid";\n        await payment.save();\n      }\n\n      res.json({ message: "Payment deleted", deletedPaymentId: fee._id });\n    } catch (err) {\n      res.status(400).json({ message: err.message });\n    }\n  },\n);\n\n// ─────────────────────────────────────────────────────────────────────────
+// DELETE /api/finance/:id - remove a fee payment entered in the current
+// academic year. This is deliberately limited to the same roles that can
+// record/edit fees. The receipt is stored on the Fee document itself, so
+// removing the document also removes its uploaded receipt. After deletion,
+// every remaining payment for the student is recalculated so their running
+// Paid/Partial/Unpaid status cannot become stale.
+router.delete(
+  "/:id",
+  protect,
+  authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
+    try {
+      const fee = await Fee.findById(req.params.id);
+      if (!fee) return res.status(404).json({ message: "Fee record not found" });
+
+      const violation = await levelScopeViolation(req.user.role, fee.student);
+      if (violation) return res.status(403).json({ message: violation });
+
+      const settings = await Settings.findOne();
+      const currentAcademicYear = settings?.academicYear || "";
+      if (fee.academicYear && currentAcademicYear && fee.academicYear !== currentAcademicYear) {
+        return res.status(403).json({
+          message: "Payments from a previous academic year cannot be deleted from the archive.",
+        });
+      }
+
+      const studentId = fee.student;
+      await Fee.deleteOne({ _id: fee._id });
+
+      // Rebuild the running status of every remaining payment for this
+      // student/year. This matters when a later installment made the student
+      // fully paid and that installment is now removed.
+      const remaining = await Fee.find({
+        student: studentId,
+        academicYear: fee.academicYear,
+      }).sort({ paidOn: 1, createdAt: 1 });
+
+      const student = await User.findById(studentId).populate({
+        path: "classId",
+        select: "name level classGroup",
+      });
+      const requiredFee = resolveRequiredFee(settings, {
+        level: student?.classId?.level,
+        classGroup: student?.classId?.classGroup,
+        name: student?.classId?.name,
+      });
+
+      let runningTotal = 0;
+      for (const payment of remaining) {
+        runningTotal += payment.amount || 0;
+        payment.expectedAmount = requiredFee;
+        payment.status =
+          runningTotal <= 0
+            ? "Unpaid"
+            : requiredFee > 0 && runningTotal >= requiredFee
+              ? "Paid"
+              : requiredFee > 0
+                ? "Partial"
+                : "Paid";
+        await payment.save();
+      }
+
+      res.json({ message: "Payment deleted", deletedPaymentId: fee._id });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────
 // BANK TRANSACTIONS (deposits/withdrawals)
 // Entering a deposit/withdrawal is General Admin work only — not even the
 // Junior Admin (this is the whole-school bank account, not a level-scoped
