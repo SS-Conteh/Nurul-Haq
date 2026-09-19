@@ -2,6 +2,13 @@ const express = require("express");
 const User = require("../models/User");
 const Grade = require("../models/Grade");
 const Attendance = require("../models/Attendance");
+const Fee = require("../models/Fee");
+const Behavior = require("../models/Behavior");
+const Promotion = require("../models/Promotion");
+const Borrower = require("../models/Borrower");
+const Assignment = require("../models/Assignment");
+const Message = require("../models/Message");
+const Notice = require("../models/Notice");
 const { protect, authorize } = require("../middleware/auth");
 
 const router = express.Router();
@@ -526,8 +533,35 @@ router.delete(
         .status(403)
         .json({ message: "A Junior School Admin cannot remove an SSS student" });
     }
+    // A student is a User document referenced by many independent
+    // collections. Remove the student's complete school history first so
+    // deleting the User can never leave orphaned fees, grades, attendance,
+    // library loans, behavior records, promotion decisions, etc.
+    // Assignment submissions and notice personal-dismissal references are
+    // embedded arrays, so those are pulled from their parent documents.
+    // Messages are removed when the student is either sender or recipient.
+    await Promise.all([
+      Fee.deleteMany({ student: student._id }),
+      Grade.deleteMany({ student: student._id }),
+      Attendance.deleteMany({ student: student._id }),
+      Behavior.deleteMany({ student: student._id }),
+      Promotion.deleteMany({ student: student._id }),
+      Borrower.deleteMany({ student: student._id }),
+      Assignment.updateMany(
+        { "submissions.student": student._id },
+        { $pull: { submissions: { student: student._id } } },
+      ),
+      Message.deleteMany({
+        $or: [{ from: student._id }, { to: student._id }],
+      }),
+      Notice.updateMany(
+        { clearedBy: student._id },
+        { $pull: { clearedBy: student._id } },
+      ),
+    ]);
+
     await student.deleteOne();
-    res.json({ message: "Student removed" });
+    res.json({ message: "Student and all related records removed" });
   },
 );
 
