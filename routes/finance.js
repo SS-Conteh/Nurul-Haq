@@ -72,7 +72,7 @@ router.get("/", protect, async (req, res) => {
   if (req.query.term) filter.term = req.query.term;
   if (req.user.role === "student") filter.student = req.user._id;
 
-  let fees = await Fee.find(filter).populate(feePopulate).sort("-paidOn");
+  let fees = await Fee.find(filter).populate(feePopulate).populate("recordedBy", "name role").sort("-paidOn");
 
   if (req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") {
     fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
@@ -116,7 +116,7 @@ router.get("/my-summary", protect, async (req, res) => {
     name: student?.classId?.name,
   });
 
-  const fees = await Fee.find({ student: studentId, academicYear }).sort("-paidOn");
+  const fees = await Fee.find({ student: studentId, academicYear }).populate("recordedBy", "name role").sort("-paidOn");
   const paidToDate = fees.reduce((s, f) => s + (f.amount || 0), 0);
   const balance = Math.max(0, requiredFee - paidToDate);
   const status =
@@ -274,7 +274,7 @@ router.get(
     const fees = await Fee.find({
       student: { $in: studentIds },
       academicYear,
-    }).sort("-paidOn");
+    }).populate("recordedBy", "name role").sort("-paidOn");
 
     // Every installment payment a student has made this academic year,
     // most recent first.
@@ -360,6 +360,7 @@ router.post(
         recordedBy: req.user._id,
       });
       await fee.populate(feePopulate);
+      await fee.populate("recordedBy", "name role");
       res.status(201).json({ fee });
     } catch (err) {
       res.status(400).json({ message: err.message });
@@ -400,7 +401,7 @@ router.put(
       const fee = await Fee.findByIdAndUpdate(req.params.id, body, {
         new: true,
         runValidators: true,
-      }).populate(feePopulate);
+      }).populate(feePopulate).populate("recordedBy", "name role");
       if (!fee) return res.status(404).json({ message: "Fee record not found" });
       res.json({ fee });
     } catch (err) {
