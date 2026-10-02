@@ -9,6 +9,7 @@ const Notice = require("../models/Notice");
 const { protect } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
 const { getStudentGradeAccess } = require("../utils/gradeAccess");
+const { sectionScope, scopedClassIds } = require("../utils/accessScope");
 const router = express.Router();
 
 function avg(arr, fn) {
@@ -27,18 +28,21 @@ router.get("/", protect, async (req, res) => {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // A Junior School Admin's dashboard is scoped to Nursery/Primary/JSS
-    // only — never SSS — so its counts/queries are narrowed to students,
-    // teachers, and attendance in those classes.
+    // Section isolation: Junior Admin/Junior Principal see Nursery–JSS;
+    // Senior Principal/Vice Principal/Senior Bursar see SSS; Admin and
+    // Proprietor see both sections.
+    const scope = sectionScope(req.user);
     let scopeStudentFilter = { role: "student" };
     let scopeTeacherFilter = { role: "teacher" };
     let scopeClassIds = null;
-    if (role === "juniorAdmin") {
-      scopeClassIds = (
-        await SchoolClass.find({ level: { $ne: "SSS" } }).select("_id").lean()
-      ).map((c) => c._id);
+    if (scope !== "all") {
+      scopeClassIds = await scopedClassIds(req.user);
       scopeStudentFilter.classId = { $in: scopeClassIds };
-      scopeTeacherFilter.level = { $in: ["Nursery", "Primary", "JSS", ""] };
+      if (scope === "junior") {
+        scopeTeacherFilter.$or = [{ levelsTaught: { $in: ["Nursery", "Primary", "JSS"] } }, { level: { $in: ["Nursery", "Primary", "JSS", ""] } }];
+      } else {
+        scopeTeacherFilter.$or = [{ levelsTaught: "SSS" }, { level: "SSS" }];
+      }
     }
 
     // Run every independent query in parallel instead of one-at-a-time,
@@ -78,12 +82,9 @@ router.get("/", protect, async (req, res) => {
     ] = await Promise.all([
       User.countDocuments(scopeTeacherFilter),
       User.countDocuments(scopeStudentFilter),
-      role === "juniorAdmin"
+      scope !== "all"
         ? Grade.aggregate([
-            { $match: gradeYearMatch },
-            { $lookup: { from: "users", localField: "student", foreignField: "_id", as: "s" } },
-            { $unwind: "$s" },
-            { $match: { "s.classId": { $in: scopeClassIds } } },
+            { $match: { ...gradeYearMatch, classId: { $in: scopeClassIds } } },
             { $group: { _id: null, avg: { $avg: "$total" } } },
           ])
         : Grade.aggregate([
@@ -95,7 +96,7 @@ router.get("/", protect, async (req, res) => {
       // just shows 0 rather than querying at all.
       viewingPastYear
         ? Promise.resolve([])
-        : role === "juniorAdmin"
+        : scope !== "all"
           ? Attendance.find({ date: { $gte: todayStart, $lte: todayEnd }, classId: { $in: scopeClassIds } })
               .select("status")
               .lean()
@@ -107,11 +108,23 @@ router.get("/", protect, async (req, res) => {
       // Paid/Partial/Unpaid (fees are annual now, so a "Partial"
       // installment's amount is still real money in hand and should count
       // toward this figure).
-      Fee.aggregate([
-        { $match: { academicYear: requestedYear || settings?.academicYear || "" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } },
-      ]),
-      Notice.find().sort("-createdAt").limit(3).lean(),
+      scope !== "all"
+        ? Fee.aggregate([
+            { $match: { academicYear: requestedYear || settings?.academicYear || "" } },
+            { $lookup: { from: "users", localField: "student", foreignField: "_id", as: "s" } },
+            { $unwind: "$s" },
+            { $match: { "s.classId": { $in: scopeClassIds } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } },
+          ])
+        : Fee.aggregate([
+            { $match: { academicYear: requestedYear || settings?.academicYear || "" } },
+            { $group: { _id: null, total: { $sum: "$amount" } } },
+          ]),
+      (() => {
+        const noticeFilter = {};
+        if (scope !== "all") noticeFilter.section = scope === "junior" ? "Junior" : "Senior";
+        return Notice.find(noticeFilter).sort("-createdAt").limit(3).lean();
+      })(),
     ]);
 
     const avgGrade = gradeAgg[0] ? Math.round(gradeAgg[0].avg) : 0;

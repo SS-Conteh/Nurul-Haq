@@ -24,6 +24,8 @@ const NoticeSchema = new mongoose.Schema(
     postedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     // Same purpose as Grade.academicYear — set once at creation.
     academicYear: { type: String, default: "" },
+    // School section ownership: Junior or Senior. Legacy records default to Senior.
+    section: { type: String, enum: ["Junior", "Senior"], default: "Senior", index: true },
     // Same purpose as academicYear, but for the current TERM — set once
     // at creation from Settings.currentTerm/academicYear (see
     // utils/academicYear.js currentTermString). Powers the term dropdown

@@ -8,8 +8,10 @@ const Promotion = require("../models/Promotion");
 const Borrower = require("../models/Borrower");
 const Assignment = require("../models/Assignment");
 const Message = require("../models/Message");
+const SchoolClass = require("../models/SchoolClass");
 const Notice = require("../models/Notice");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope, scopedClassIds, levelAllowed, studentInScope } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -164,6 +166,11 @@ router.get(
   authorize("principal", "teacher", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const filter = { role: "student" };
+    const scope = sectionScope(req.user);
+    if (scope !== "all" && req.user.role !== "teacher") {
+      const ids = await scopedClassIds(req.user);
+      filter.classId = { $in: ids };
+    }
     if (req.user.role === "teacher") {
       // A Class Master is scoped strictly to the class(es) they master on
       // this Students page. A class-master who is also a subject teacher
@@ -193,6 +200,8 @@ router.get(
         }
       }
     } else if (req.query.classId) {
+      const requestedClass = await SchoolClass.findById(req.query.classId).select("level");
+      if (!requestedClass || !levelAllowed(req.user, requestedClass.level)) return res.json({ students: [], count: 0 });
       filter.classId = req.query.classId;
     }
 
@@ -314,6 +323,7 @@ router.get("/:id", protect, async (req, res) => {
     role: "student",
   }).populate("classId", "name level classGroup");
   if (!student) return res.status(404).json({ message: "Student not found" });
+  if (!levelAllowed(req.user, student.classId?.level) && req.user.role !== "teacher") return res.status(403).json({ message: "This student is outside your school section" });
 
   if (req.user.role === "teacher") {
     const masterScope = [
@@ -341,8 +351,9 @@ router.get("/:id", protect, async (req, res) => {
 // grades/records they earned there intact and un-blended with wherever
 // they are now.
 router.get("/:id/history", protect, async (req, res) => {
-  const student = await User.findOne({ _id: req.params.id, role: "student" });
+  const student = await User.findOne({ _id: req.params.id, role: "student" }).populate("classId", "name level classGroup");
   if (!student) return res.status(404).json({ message: "Student not found" });
+  if (!levelAllowed(req.user, student.classId?.level)) return res.status(403).json({ message: "This student is outside your school section" });
 
   const SchoolClass = require("../models/SchoolClass");
   const [gradeGroups, attGroups] = await Promise.all([
@@ -491,6 +502,9 @@ router.put(
   authorize("juniorAdmin", "admin"),
   async (req, res) => {
     try {
+      const existing = await User.findOne({ _id: req.params.id, role: "student" }).populate("classId", "level");
+      if (!existing) return res.status(404).json({ message: "Student not found" });
+      if (!levelAllowed(req.user, existing.classId?.level)) return res.status(403).json({ message: "This student is outside your school section" });
       const body = { ...req.body };
       if (!body.classId) delete body.classId;
       if (req.user.role === "juniorAdmin" && body.classId) {
@@ -501,6 +515,10 @@ router.put(
             message: "A Junior School Admin cannot move a student into an SSS class",
           });
         }
+      }
+      if (body.classId) {
+        const targetClass = await require("../models/SchoolClass").findById(body.classId);
+        if (!targetClass || !levelAllowed(req.user, targetClass.level)) return res.status(403).json({ message: "The target class is outside your school section" });
       }
       const student = await User.findOneAndUpdate(
         { _id: req.params.id, role: "student" },
@@ -528,11 +546,7 @@ router.delete(
       role: "student",
     }).populate("classId", "level");
     if (!student) return res.status(404).json({ message: "Student not found" });
-    if (req.user.role === "juniorAdmin" && student.classId?.level === "SSS") {
-      return res
-        .status(403)
-        .json({ message: "A Junior School Admin cannot remove an SSS student" });
-    }
+    if (!levelAllowed(req.user, student.classId?.level)) return res.status(403).json({ message: "This student is outside your school section" });
     // A student is a User document referenced by many independent
     // collections. Remove the student's complete school history first so
     // deleting the User can never leave orphaned fees, grades, attendance,

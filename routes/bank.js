@@ -1,6 +1,7 @@
 const express = require("express");
 const BankTransaction = require("../models/BankTransaction");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope } = require("../utils/accessScope");
 const router = express.Router();
 
 // Bank record-keeping (deposits/withdrawals) is the General Admin's job —
@@ -10,7 +11,9 @@ const router = express.Router();
 
 // GET /api/bank - full ledger, newest first, with a running balance
 router.get("/", protect, authorize("principal", "admin"), async (req, res) => {
-  const txns = await BankTransaction.find().sort("date createdAt");
+  const scope = sectionScope(req.user);
+  const section = scope === "junior" ? "Junior" : scope === "senior" ? "Senior" : null;
+  const txns = await BankTransaction.find(section ? { section } : {}).sort("date createdAt");
   let running = 0;
   const withBalance = txns.map((t) => {
     running += t.type === "Deposit" ? t.amount : -t.amount;
@@ -28,7 +31,9 @@ router.get(
   protect,
   authorize("principal", "admin"),
   async (req, res) => {
-    const txns = await BankTransaction.find();
+    const scope = sectionScope(req.user);
+    const section = scope === "junior" ? "Junior" : scope === "senior" ? "Senior" : null;
+    const txns = await BankTransaction.find(section ? { section } : {});
     const totalDeposits = txns
       .filter((t) => t.type === "Deposit")
       .reduce((s, t) => s + t.amount, 0);

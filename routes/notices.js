@@ -3,6 +3,7 @@ const Notice = require("../models/Notice");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter, currentTermString } = require("../utils/academicYear");
+const { sectionScope } = require("../utils/accessScope");
 const router = express.Router();
 const { sendNoticePush } = require("../utils/pushNotifications");
 
@@ -12,6 +13,8 @@ function visibleNoticeFilter(user, settings, query = {}) {
     ...yearFilter(settings?.academicYear, query.ay),
   };
   if (query.term) filter.term = query.term;
+  const scope = sectionScope(user);
+  if (scope !== "all") filter.section = scope === "junior" ? "Junior" : "Senior";
   if (user.role === "student") {
     filter.category = "students";
   } else if (user.role === "teacher") {
@@ -74,6 +77,7 @@ router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) =>
   const notice = await Notice.create({
     ...req.body,
     postedBy: req.user._id,
+    section: sectionScope(req.user) === "junior" ? "Junior" : "Senior",
     academicYear: settings?.academicYear || "",
     term: currentTermString(settings) || "",
   });

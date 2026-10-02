@@ -3,6 +3,7 @@ const SchoolClass = require("../models/SchoolClass");
 const User = require("../models/User");
 const Grade = require("../models/Grade");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope, levelsForScope } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -30,9 +31,11 @@ router.get("/", protect, async (req, res) => {
   const filter = {};
   if (req.query.level) filter.level = req.query.level;
   if (req.query.classGroup) filter.classGroup = req.query.classGroup;
-  // Junior School Admin (Nursery-JSS) never sees SSS classes.
-  if (req.user.role === "juniorAdmin") {
-    filter.level = filter.level && filter.level !== "SSS" ? filter.level : { $ne: "SSS" };
+  const scope = sectionScope(req.user);
+  if (scope !== "all") {
+    const levels = levelsForScope(scope) || [];
+    if (req.query.level && !levels.includes(req.query.level)) return res.json({ classes: [] });
+    filter.level = filter.level || { $in: levels };
   }
   const classes = await SchoolClass.find(filter)
     .populate("classTeacher", "name initials color")

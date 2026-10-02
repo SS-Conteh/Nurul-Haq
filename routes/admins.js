@@ -1,6 +1,7 @@
 const express = require("express");
 const User = require("../models/User");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -40,6 +41,19 @@ router.get(
     if (req.query.role && ADMIN_ROLES.includes(req.query.role)) {
       filter.role = req.query.role;
     }
+    const scope = sectionScope(req.user);
+    if (scope === "junior") {
+      const allowed = new Set(["juniorAdmin", "juniorBursar"]);
+      filter.$or = [
+        { role: { $in: [...allowed] } },
+        { role: "principal", principalTitle: "Junior Principal" },
+      ];
+    } else if (scope === "senior") {
+      filter.$or = [
+        { role: "seniorBursar" },
+        { role: "principal", principalTitle: { $in: ["Senior Principal", "Vice Principal", ""] } },
+      ];
+    }
     const admins = await User.find(filter).sort("name");
     res.json({ admins: admins.map((a) => a.toSafeObject()), count: admins.length });
   },
@@ -53,6 +67,9 @@ router.get(
   async (req, res) => {
     const admin = await User.findOne({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
     if (!admin) return res.status(404).json({ message: "Admin not found" });
+    const scope = sectionScope(req.user);
+    if (scope === "junior" && !((admin.role === "juniorAdmin") || (admin.role === "juniorBursar") || (admin.role === "principal" && admin.principalTitle === "Junior Principal"))) return res.status(403).json({ message: "This account is outside your school section" });
+    if (scope === "senior" && !((admin.role === "seniorBursar") || (admin.role === "principal" && ["Senior Principal", "Vice Principal", ""].includes(admin.principalTitle)))) return res.status(403).json({ message: "This account is outside your school section" });
     res.json({ admin: admin.toSafeObject() });
   },
 );

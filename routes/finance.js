@@ -7,6 +7,7 @@ const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
 const { resolveRequiredFee, feeSourceLabel } = require("../utils/fees");
+const { sectionScope, levelAllowed, studentInScope } = require("../utils/accessScope");
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -37,6 +38,8 @@ async function computeFeeStatus(studentId, amount, excludeFeeId = null) {
     path: "classId",
     select: "name level classGroup",
   });
+  if (!student) return res.status(404).json({ message: "Student not found" });
+  if (req.user.role !== "student" && !levelAllowed(req.user, student.classId?.level)) return res.status(403).json({ message: "This student is outside your school section" });
   const settings = await Settings.findOne();
   // Per-CLASS fee first (Settings → Fee Structure by Class), falling back
   // to the level-wide figure for any class that hasn't been given its own.
@@ -74,13 +77,9 @@ router.get("/", protect, async (req, res) => {
 
   let fees = await Fee.find(filter).populate(feePopulate).populate("recordedBy", "name role").sort("-paidOn");
 
-  if (req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") {
-    fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
-  }
-  // The Senior Bursar handles SSS fees only.
-  if (req.user.role === "seniorBursar") {
-    fees = fees.filter((f) => f.student?.classId?.level === "SSS");
-  }
+  const scope = sectionScope(req.user);
+  if (scope === "junior") fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
+  if (scope === "senior") fees = fees.filter((f) => f.student?.classId?.level === "SSS");
   if (req.query.level) {
     fees = fees.filter((f) => f.student?.classId?.level === req.query.level);
   }
@@ -165,15 +164,9 @@ router.get(
       select: "classId",
       populate: { path: "classId", select: "name level classGroup" },
     });
-    // Only a Bursar's totals are scoped to their own level — the Junior
-    // Admin sees the whole school here for transparency (see comment
-    // above).
-    if (req.user.role === "juniorBursar") {
-      fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
-    }
-    if (req.user.role === "seniorBursar") {
-      fees = fees.filter((f) => f.student?.classId?.level === "SSS");
-    }
+    const scope = sectionScope(req.user);
+    if (scope === "junior") fees = fees.filter((f) => f.student?.classId?.level !== "SSS");
+    if (scope === "senior") fees = fees.filter((f) => f.student?.classId?.level === "SSS");
 
     const byStudent = {};
     fees.forEach((f) => {
@@ -242,15 +235,8 @@ router.get(
     }
     const cls = await SchoolClass.findById(classId);
     if (!cls) return res.status(404).json({ message: "Class not found" });
-    if ((req.user.role === "juniorAdmin" || req.user.role === "juniorBursar") && cls.level === "SSS") {
-      return res.status(403).json({
-        message: "A Junior School Admin/Bursar cannot view SSS fee records",
-      });
-    }
-    if (req.user.role === "seniorBursar" && cls.level !== "SSS") {
-      return res.status(403).json({
-        message: "The Senior Bursar only handles SSS fee records",
-      });
+    if (!levelAllowed(req.user, cls.level)) {
+      return res.status(403).json({ message: "This class is outside your school section" });
     }
 
     const students = await User.find({ role: "student", classId })
@@ -321,12 +307,14 @@ router.get(
 // School Admin: Nursery/Primary/JSS. General Admin has no restriction.
 // Returns an error message string if out of scope, otherwise null.
 async function levelScopeViolation(role, studentId) {
+  const user = { role, principalTitle: "" };
+  // This helper is called with role only by the legacy call sites. The explicit
+  // principal roles are handled by studentInScope in the write routes below.
   if (role !== "seniorBursar" && role !== "juniorBursar" && role !== "juniorAdmin") return null;
-  const student = await User.findById(studentId).populate({ path: "classId", select: "level" });
-  const level = student?.classId?.level;
-  const inScope = role === "seniorBursar" ? level === "SSS" : level && level !== "SSS";
-  return inScope ? null : "This student is outside your level";
+  const ok = await studentInScope(user, studentId);
+  return ok ? null : "This student is outside your school section";
 }
+
 
 // POST /api/finance - record an installment fee payment. General Admin,
 // the Junior School Admin (Nursery–JSS only), or a Bursar for their own
@@ -339,7 +327,7 @@ router.post(
   authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     try {
-      const violation = await levelScopeViolation(req.user.role, req.body.student);
+      const violation = (req.user.role === "admin") ? null : ((await studentInScope(req.user, req.body.student)) ? null : "This student is outside your school section");
       if (violation) return res.status(403).json({ message: violation });
       if (!req.body.receipt) {
         return res.status(400).json({
@@ -377,7 +365,7 @@ router.put(
   authorize("admin", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     try {
-      const violation = await levelScopeViolation(req.user.role, req.body.student);
+      const violation = (req.user.role === "admin") ? null : ((await studentInScope(req.user, req.body.student)) ? null : "This student is outside your school section");
       if (violation) return res.status(403).json({ message: violation });
       if (!req.body.receipt) {
         return res.status(400).json({
@@ -425,7 +413,7 @@ router.delete(
       const fee = await Fee.findById(req.params.id);
       if (!fee) return res.status(404).json({ message: "Fee record not found" });
 
-      const violation = await levelScopeViolation(req.user.role, fee.student);
+      const violation = (req.user.role === "admin") ? null : ((await studentInScope(req.user, fee.student)) ? null : "This student is outside your school section");
       if (violation) return res.status(403).json({ message: violation });
 
       const settings = await Settings.findOne();
@@ -479,6 +467,19 @@ router.delete(
   },
 );
 
+function bankSectionForUser(user) {
+  const scope = sectionScope(user);
+  if (scope === "junior") return "Junior";
+  if (scope === "senior") return "Senior";
+  return null;
+}
+
+function bankSectionQuery(user, requested) {
+  const forced = bankSectionForUser(user);
+  if (forced) return forced;
+  return requested === "Junior" || requested === "Senior" ? requested : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // BANK TRANSACTIONS (deposits/withdrawals)
 // Entering a deposit/withdrawal is General Admin work only — not even the
@@ -503,10 +504,12 @@ router.get(
   protect,
   authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
-  const transactions = await BankTransaction.find()
+  const section = bankSectionQuery(req.user, req.query.section);
+  const filter = section ? { section } : {};
+  const transactions = await BankTransaction.find(filter)
     .populate("recordedBy", "name role")
     .sort("-date");
-  res.json({ transactions });
+  res.json({ transactions, section: section || "All" });
 });
 
 // GET /api/finance/transactions/summary - also reports the one-time
@@ -529,25 +532,32 @@ router.get(
   authorize("principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const settings = await Settings.findOne();
+    const section = bankSectionQuery(req.user, req.query.section);
+    const baseFilter = section ? { section } : {};
     const [allTransactions, yearTransactions] = await Promise.all([
-      BankTransaction.find(),
-      BankTransaction.find(yearFilter(settings?.academicYear, req.query.ay)),
+      BankTransaction.find(baseFilter),
+      BankTransaction.find({ ...yearFilter(settings?.academicYear, req.query.ay), ...baseFilter }),
     ]);
-    const openingBalance = settings?.bankOpeningBalance ?? null;
     const sumByType = (list, type) =>
       list.filter((t) => t.type === type).reduce((s, t) => s + t.amount, 0);
-    const allDeposits = sumByType(allTransactions, "Deposit");
-    const allWithdrawals = sumByType(allTransactions, "Withdrawal");
-    res.json({
-      deposits: sumByType(yearTransactions, "Deposit"),
-      withdrawals: sumByType(yearTransactions, "Withdrawal"),
-      count: yearTransactions.length,
-      // Real, all-time running balance — never scoped to a single year.
-      balance: (openingBalance || 0) + allDeposits - allWithdrawals,
-      openingBalance,
-      openingBalanceSetAt: settings?.bankOpeningBalanceSetAt || null,
-      openingBalanceSetBy: settings?.bankOpeningBalanceSetBy || "",
+    const sections = ["Junior", "Senior"].map((name) => {
+      const key = name.toLowerCase();
+      const opening = settings?.bankAccounts?.[key]?.openingBalance ?? (name === "Senior" ? settings?.bankOpeningBalance ?? null : null);
+      const all = allTransactions.filter((t) => t.section === name);
+      const yearly = yearTransactions.filter((t) => t.section === name);
+      return {
+        section: name,
+        deposits: sumByType(yearly, "Deposit"),
+        withdrawals: sumByType(yearly, "Withdrawal"),
+        count: yearly.length,
+        balance: (opening || 0) + sumByType(all, "Deposit") - sumByType(all, "Withdrawal"),
+        openingBalance: opening,
+        openingBalanceSetAt: settings?.bankAccounts?.[key]?.openingBalanceSetAt || (name === "Senior" ? settings?.bankOpeningBalanceSetAt || null : null),
+        openingBalanceSetBy: settings?.bankAccounts?.[key]?.openingBalanceSetBy || (name === "Senior" ? settings?.bankOpeningBalanceSetBy || "" : ""),
+      };
     });
+    const selected = section ? sections.find((x) => x.section === section) : null;
+    res.json(selected ? selected : { section: "All", sections, deposits: sections.reduce((s,x)=>s+x.deposits,0), withdrawals: sections.reduce((s,x)=>s+x.withdrawals,0), count: sections.reduce((s,x)=>s+x.count,0), balance: sections.reduce((s,x)=>s+x.balance,0), openingBalance: null, openingBalanceSetAt: null, openingBalanceSetBy: "" });
   },
 );
 
@@ -559,28 +569,31 @@ router.get(
 router.post(
   "/transactions/opening-balance",
   protect,
-  authorize("admin"),
+  authorize("admin", "principal", "juniorAdmin", "seniorBursar", "juniorBursar"),
   async (req, res) => {
     const amount = Number(req.body.amount);
     if (!Number.isFinite(amount) || amount < 0) {
       return res.status(400).json({ message: "A valid balance amount is required" });
     }
+    const section = bankSectionQuery(req.user, req.body.section);
+    if (!section) return res.status(400).json({ message: "Choose Junior or Senior bank section" });
     let settings = await Settings.findOne();
     if (!settings) settings = new Settings();
-    if (settings.bankOpeningBalanceSetAt) {
-      return res.status(400).json({
-        message: "The opening bank balance has already been recorded and cannot be changed.",
-      });
+    if (!settings.bankAccounts) settings.bankAccounts = {};
+    const key = section.toLowerCase();
+    const account = settings.bankAccounts[key] || {};
+    if (account.openingBalanceSetAt || (section === "Senior" && settings.bankOpeningBalanceSetAt)) {
+      return res.status(400).json({ message: `${section} opening bank balance has already been recorded and cannot be changed.` });
     }
-    settings.bankOpeningBalance = amount;
-    settings.bankOpeningBalanceSetAt = new Date();
-    settings.bankOpeningBalanceSetBy = req.user.name;
+    settings.bankAccounts[key] = { openingBalance: amount, openingBalanceSetAt: new Date(), openingBalanceSetBy: req.user.name };
+    // Keep the legacy senior fields in sync for old clients/data.
+    if (section === "Senior") {
+      settings.bankOpeningBalance = amount;
+      settings.bankOpeningBalanceSetAt = settings.bankAccounts[key].openingBalanceSetAt;
+      settings.bankOpeningBalanceSetBy = req.user.name;
+    }
     await settings.save();
-    res.status(201).json({
-      openingBalance: settings.bankOpeningBalance,
-      openingBalanceSetAt: settings.bankOpeningBalanceSetAt,
-      openingBalanceSetBy: settings.bankOpeningBalanceSetBy,
-    });
+    res.status(201).json({ section, ...settings.bankAccounts[key].toObject?.() || settings.bankAccounts[key] });
   },
 );
 
@@ -599,8 +612,11 @@ router.post(
         message: "A photo/scan of the deposit or withdrawal slip is required",
       });
     }
+    const forcedSection = bankSectionQuery(req.user, req.body.section);
+    if (!forcedSection) return res.status(400).json({ message: "Choose Junior or Senior bank section" });
     const txn = await BankTransaction.create({
       ...req.body,
+      section: forcedSection,
       recordedBy: req.user._id,
     });
     await txn.populate("recordedBy", "name role");

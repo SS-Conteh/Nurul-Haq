@@ -5,6 +5,7 @@ const Settings = require("../models/Settings");
 const { getStudentGradeAccess } = require("../utils/gradeAccess");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter, currentTermString } = require("../utils/academicYear");
+const { sectionScope, scopedClassIds, levelAllowed, studentInScope } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -49,6 +50,10 @@ router.get("/", protect, async (req, res) => {
     }
   }
 
+  if (req.query.studentId && req.user.role !== "student" && req.user.role !== "teacher" && sectionScope(req.user) !== "all") {
+    if (!(await studentInScope(req.user, req.query.studentId))) return res.json({ grades: [] });
+  }
+
   if (req.query.classId && !req.query.studentId) {
     // Match grades actually recorded while the student was in this class
     // — NOT students currently in this class. A promoted student's old
@@ -56,26 +61,18 @@ router.get("/", protect, async (req, res) => {
     filter.classId = req.query.classId;
   }
 
-  // A Junior School Admin (Nursery–JSS only) may never see grades for a
-  // student in an SSS class, no matter what filters they pass.
-  if (req.user.role === "juniorAdmin") {
-    const SchoolClass = require("../models/SchoolClass");
-    const nonSssClassIds = await SchoolClass.find({
-      level: { $ne: "SSS" },
-    }).distinct("_id");
-    const scopedStudentIds = (
-      await User.find({ role: "student", classId: { $in: nonSssClassIds } }).distinct("_id")
-    ).map(String);
-
-    if (typeof filter.student === "string") {
-      // A specific studentId was requested — only honor it if it's in scope.
-      if (!scopedStudentIds.includes(filter.student)) filter.student = { $in: [] };
-    } else if (filter.student && filter.student.$in) {
-      // Narrowed already by classId — intersect with the in-scope set.
-      const already = filter.student.$in.map(String);
-      filter.student = { $in: already.filter((id) => scopedStudentIds.includes(id)) };
+  // Section isolation applies to every admin/oversight grade query. Grades
+  // are permanently tied to the class in which they were earned, so this
+  // also protects historical grades after a student is promoted.
+  const scope = sectionScope(req.user);
+  if (scope !== "all" && req.user.role !== "student" && req.user.role !== "teacher") {
+    const classIds = await scopedClassIds(req.user);
+    if (filter.classId) {
+      const allowed = new Set(classIds.map(String));
+      const requested = String(filter.classId);
+      filter.classId = allowed.has(requested) ? filter.classId : { $in: [] };
     } else {
-      filter.student = { $in: scopedStudentIds };
+      filter.classId = { $in: classIds };
     }
   }
 
@@ -120,6 +117,10 @@ router.post(
   async (req, res) => {
     try {
       const { student, subject, term, test, examScore, remark, position } = req.body;
+      const section = sectionScope(req.user);
+      const scopedStudent = await User.findById(student).select("classId");
+      if (!scopedStudent) return res.status(404).json({ message: "Student not found" });
+      if (section !== "all" && !(await studentInScope(req.user, student))) return res.status(403).json({ message: "This student is outside your school section" });
       let studentDocForAuthorization = null;
       if (req.user.role === "teacher") {
         studentDocForAuthorization = await User.findById(student).select("classId");
@@ -214,6 +215,10 @@ router.put(
     // grade once it's been entered. The Principal is view-only for grades.
     const grade = await Grade.findById(req.params.id);
     if (!grade) return res.status(404).json({ message: "Grade not found" });
+    if (sectionScope(req.user) !== "all") {
+      const allowed = await scopedClassIds(req.user);
+      if (!grade.classId || !allowed.some((id) => String(id) === String(grade.classId))) return res.status(403).json({ message: "This grade is outside your school section" });
+    }
     Object.assign(grade, req.body);
     await grade.save();
     res.json({ grade });
@@ -227,8 +232,13 @@ router.delete(
   protect,
   authorize("admin", "juniorAdmin"),
   async (req, res) => {
-    const grade = await Grade.findByIdAndDelete(req.params.id);
+    const grade = await Grade.findById(req.params.id);
     if (!grade) return res.status(404).json({ message: "Grade not found" });
+    if (sectionScope(req.user) !== "all") {
+      const allowed = await scopedClassIds(req.user);
+      if (!grade.classId || !allowed.some((id) => String(id) === String(grade.classId))) return res.status(403).json({ message: "This grade is outside your school section" });
+    }
+    await grade.deleteOne();
     res.json({ message: "Grade removed" });
   },
 );

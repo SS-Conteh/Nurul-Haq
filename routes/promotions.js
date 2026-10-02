@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { resolveNextClass, computePromotions } = require("../utils/promotion");
+const { sectionScope, levelAllowed, studentInScope } = require("../utils/accessScope");
 const router = express.Router();
 
 // POST /api/promotions/compute - General Admin only. Explicitly runs
@@ -48,9 +49,8 @@ router.get(
     let promotions = await Promotion.find(filter)
       .populate(populate)
       .sort("-createdAt");
-    if (req.user.role === "juniorAdmin") {
-      promotions = promotions.filter((p) => p.fromClass?.level !== "SSS");
-    }
+    const scope = sectionScope(req.user);
+    if (scope !== "all") promotions = promotions.filter((p) => levelAllowed(req.user, p.fromClass?.level));
     res.json({ promotions });
   },
 );

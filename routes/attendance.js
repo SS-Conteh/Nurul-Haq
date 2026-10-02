@@ -7,6 +7,7 @@ const DailyQRCode = require("../models/DailyQRCode");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter, currentTermString } = require("../utils/academicYear");
+const { sectionScope, scopedClassIds, studentInScope, levelAllowed } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -150,10 +151,17 @@ router.post(
 // own attendance is never tracked).
 router.get("/teachers", protect, authorize("admin", "juniorAdmin", "principal"), async (req, res) => {
   const date = req.query.date || todayStr();
-  const records = await TeacherAttendance.find({ date }).populate(
+  let records = await TeacherAttendance.find({ date }).populate(
     "teacher",
-    "name initials color phone level teacherRole classTeacherOf role principalTitle",
+    "name initials color phone level levelsTaught teacherRole classTeacherOf role principalTitle",
   );
+  const scope = sectionScope(req.user);
+  if (scope !== "all") {
+    records = records.filter((r) => {
+      const levels = [...new Set([...(r.teacher?.levelsTaught || []), r.teacher?.level].filter(Boolean))];
+      return levels.some((l) => levelAllowed(req.user, l));
+    });
+  }
   res.json({ date, records });
 });
 
@@ -241,6 +249,12 @@ router.get("/", protect, async (req, res) => {
     next.setDate(d.getDate() + 1);
     filter.date = { $gte: d, $lt: next };
   }
+  const scope = sectionScope(req.user);
+  if (scope !== "all" && req.user.role !== "student" && req.user.role !== "teacher") {
+    const ids = await scopedClassIds(req.user);
+    filter.classId = filter.classId ? (ids.some((id) => String(id) === String(filter.classId)) ? filter.classId : { $in: [] }) : { $in: ids };
+  }
+  if (req.query.studentId && scope !== "all" && req.user.role !== "student" && !(await studentInScope(req.user, req.query.studentId))) return res.json({ records: [] });
   if (req.user.role === "student") filter.student = req.user._id;
   if (req.user.role === "teacher") {
     // Only a Class Master may see student attendance records, and only for
@@ -262,6 +276,7 @@ router.get("/", protect, async (req, res) => {
 
 // GET /api/attendance/summary/:studentId - term stats used across dashboards
 router.get("/summary/:studentId", protect, async (req, res) => {
+  if (sectionScope(req.user) !== "all" && !(await studentInScope(req.user, req.params.studentId))) return res.status(403).json({ message: "This student is outside your school section" });
   const records = await Attendance.find({ student: req.params.studentId });
   const total = records.length || 1;
   const present = records.filter((r) => r.status === "Present").length;
@@ -285,6 +300,10 @@ router.post(
   async (req, res) => {
     try {
       const { classId, date, records } = req.body; // records: [{student, status}]
+      if (sectionScope(req.user) !== "all") {
+        const cls = await require("../models/SchoolClass").findById(classId).select("level");
+        if (!cls || !levelAllowed(req.user, cls.level)) return res.status(403).json({ message: "This class is outside your school section" });
+      }
       if (req.user.role === "teacher") {
         const allowedClassIds = new Set([
           ...(req.user.classMasterOf || []),
@@ -333,6 +352,9 @@ router.put(
   protect,
   authorize("teacher", "admin", "juniorAdmin"),
   async (req, res) => {
+    const existing = await Attendance.findById(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Attendance record not found" });
+    if (sectionScope(req.user) !== "all" && !levelAllowed(req.user, (await require("../models/SchoolClass").findById(existing.classId).select("level"))?.level)) return res.status(403).json({ message: "This attendance record is outside your school section" });
     const record = await Attendance.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
     });

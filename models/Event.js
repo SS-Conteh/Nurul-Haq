@@ -9,6 +9,8 @@ const EventSchema = new mongoose.Schema(
     audience: { type: String, default: "Entire school" },
     // Same purpose as Grade.academicYear — set once at creation.
     academicYear: { type: String, default: "" },
+    // School section ownership: Junior or Senior. Legacy records default to Senior.
+    section: { type: String, enum: ["Junior", "Senior"], default: "Senior", index: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },

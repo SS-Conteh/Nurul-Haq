@@ -62,6 +62,11 @@ const SettingsSchema = new mongoose.Schema(
     bankOpeningBalance: { type: Number, default: null },
     bankOpeningBalanceSetAt: { type: Date, default: null },
     bankOpeningBalanceSetBy: { type: String, default: "" },
+    // Separate opening balances for the Junior and Senior bank ledgers.
+    bankAccounts: {
+      junior: { openingBalance: { type: Number, default: null }, openingBalanceSetAt: { type: Date, default: null }, openingBalanceSetBy: { type: String, default: "" } },
+      senior: { openingBalance: { type: Number, default: null }, openingBalanceSetAt: { type: Date, default: null }, openingBalanceSetBy: { type: String, default: "" } },
+    },
     // PER-CLASS annual fees. Each entry belongs to one registered class.
     // No level-wide fallback is used.
     classFees: {

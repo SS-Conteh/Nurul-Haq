@@ -12,6 +12,8 @@ const BankTransactionSchema = new mongoose.Schema(
       required: true,
     },
     amount: { type: Number, required: true, min: 0 },
+    // Which school section owns this bank ledger entry. Legacy records default to Senior so existing senior finance is preserved; new junior records are permanently isolated.
+    section: { type: String, enum: ["Junior", "Senior"], default: "Senior", index: true },
     date: { type: Date, default: Date.now },
     bankName: { type: String, default: "" },
     purpose: { type: String, default: "" }, // e.g. "Term 2 fee collections", "Staff salaries"

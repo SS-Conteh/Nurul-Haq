@@ -3,6 +3,7 @@ const Timetable = require("../models/Timetable");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { sectionScope, levelAllowed } = require("../utils/accessScope");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
@@ -16,6 +17,8 @@ router.get("/", protect, async (req, res) => {
 });
 
 router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
+  const cls = await require("../models/SchoolClass").findById(req.body.classId);
+  if (!cls || !levelAllowed(req.user, cls.level)) return res.status(403).json({ message: "This class is outside your school section" });
   const settings = await Settings.findOne();
   const entry = await Timetable.create({
     ...req.body,

@@ -3,11 +3,15 @@ const Event = require("../models/Event");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { sectionScope } = require("../utils/accessScope");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
   const settings = await Settings.findOne();
-  const events = await Event.find(yearFilter(settings?.academicYear, req.query.ay)).sort("date");
+  const filter = yearFilter(settings?.academicYear, req.query.ay);
+  const scope = sectionScope(req.user);
+  if (scope !== "all") filter.section = scope === "junior" ? "Junior" : "Senior";
+  const events = await Event.find(filter).sort("date");
   res.json({ events });
 });
 

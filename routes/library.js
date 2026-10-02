@@ -2,10 +2,14 @@ const express = require("express");
 const Book = require("../models/Book");
 const Borrower = require("../models/Borrower");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope, levelAllowed } = require("../utils/accessScope");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
-  const books = await Book.find().sort("title");
+  let books = await Book.find().sort("title");
+  const scope = sectionScope(req.user);
+  if (scope === "junior") books = books.filter((b) => !/^SSS$/i.test(b.classLevel || "") && !/SSS/i.test(b.classLevel || ""));
+  if (scope === "senior") books = books.filter((b) => /SSS/i.test(b.classLevel || ""));
   res.json({ books });
 });
 

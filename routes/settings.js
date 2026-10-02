@@ -2,6 +2,7 @@ const express = require("express");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { applyPromotionsForYear, computePromotions } = require("../utils/promotion");
+const { sectionScope } = require("../utils/accessScope");
 const router = express.Router();
 
 // GET /api/settings/public - no login required. Powers the public landing
@@ -19,7 +20,18 @@ router.get("/public", async (req, res) => {
 router.get("/", protect, async (req, res) => {
   let settings = await Settings.findOne();
   if (!settings) settings = await Settings.create({});
-  res.json({ settings });
+  const safe = settings.toObject();
+  const scope = sectionScope(req.user);
+  if (scope === "junior") {
+    safe.classFees = (safe.classFees || []).filter((f) => f.level !== "SSS");
+    safe.bankAccounts = { junior: safe.bankAccounts?.junior || { openingBalance: null } };
+    delete safe.bankOpeningBalance; delete safe.bankOpeningBalanceSetAt; delete safe.bankOpeningBalanceSetBy;
+  } else if (scope === "senior") {
+    safe.classFees = (safe.classFees || []).filter((f) => f.level === "SSS");
+    safe.bankAccounts = { senior: safe.bankAccounts?.senior || { openingBalance: safe.bankOpeningBalance ?? null } };
+    delete safe.bankOpeningBalance; delete safe.bankOpeningBalanceSetAt; delete safe.bankOpeningBalanceSetBy;
+  }
+  res.json({ settings: safe });
 });
 
 // PUT /api/settings - General Admin only. Not even the Junior School Admin,

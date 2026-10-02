@@ -3,6 +3,8 @@ const Assignment = require("../models/Assignment");
 const Settings = require("../models/Settings");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter, currentTermString } = require("../utils/academicYear");
+const { sectionScope, levelAllowed } = require("../utils/accessScope");
+const SchoolClass = require("../models/SchoolClass");
 const router = express.Router();
 
 router.get("/", protect, async (req, res) => {
@@ -19,10 +21,12 @@ router.get("/", protect, async (req, res) => {
   } else if (req.query.classId) {
     filter.classId = req.query.classId;
   }
-  const assignments = await Assignment.find(filter)
+  let assignments = await Assignment.find(filter)
     .populate("teacher", "name")
-    .populate("classId", "name")
+    .populate("classId", "name level")
     .sort("dueDate");
+  const scope = sectionScope(req.user);
+  if (scope !== "all") assignments = assignments.filter((a) => levelAllowed(req.user, a.classId?.level));
   res.json({ assignments });
 });
 
@@ -35,6 +39,8 @@ router.post(
     if (req.user.role === "teacher" && !body.subject) {
       body.subject = (req.user.subjects || [])[0] || "";
     }
+    const cls = body.classId ? await SchoolClass.findById(body.classId) : null;
+    if (!cls || !levelAllowed(req.user, cls.level)) return res.status(403).json({ message: "This class is outside your school section" });
     const settings = await Settings.findOne();
     const assignment = await Assignment.create({
       ...body,

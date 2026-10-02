@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Attendance = require("../models/Attendance");
 const SchoolClass = require("../models/SchoolClass");
 const { protect, authorize } = require("../middleware/auth");
+const { sectionScope, levelAllowed } = require("../utils/accessScope");
 
 const router = express.Router();
 
@@ -52,21 +53,33 @@ router.get("/", protect, async (req, res) => {
   const filter = { role: "teacher", approvalStatus: { $ne: "Pending" } };
   if (req.query.level) filter.$or = [{ levelsTaught: req.query.level }, { level: req.query.level }];
   if (req.query.teacherRole) filter.teacherRole = req.query.teacherRole;
-  // Junior School Admin (Nursery-JSS) never sees SSS-level teachers.
-  if (req.user.role === "juniorAdmin") {
+  const scope = sectionScope(req.user);
+  if (scope === "junior") {
     if (req.query.level === "SSS") return res.json({ teachers: [], count: 0 });
     if (req.query.level) filter.$or = [{ levelsTaught: req.query.level }, { level: req.query.level }];
-    else filter.levelsTaught = { $in: ["Nursery", "Primary", "JSS"] };
+    else filter.$or = [{ levelsTaught: { $in: ["Nursery", "Primary", "JSS"] } }, { level: { $in: ["Nursery", "Primary", "JSS", ""] } }];
+  } else if (scope === "senior") {
+    if (req.query.level && req.query.level !== "SSS") return res.json({ teachers: [], count: 0 });
+    filter.$or = [{ levelsTaught: "SSS" }, { level: "SSS" }];
   }
   const teachers = await User.find(filter)
     .populate("classTeacherOf", "name level classGroup")
     .populate("classMasterOf", "name level classGroup")
     .populate("classesTaught", "name level classGroup")
     .sort("name");
-  res.json({
-    teachers: teachers.map((t) => t.toSafeObject()),
-    count: teachers.length,
+  const scopedTeachers = teachers.map((t) => {
+    const safe = t.toSafeObject();
+    if (scope !== "all") {
+      const allowedLevels = scope === "junior" ? ["Nursery", "Primary", "JSS"] : ["SSS"];
+      safe.levelsTaught = (safe.levelsTaught || []).filter((l) => allowedLevels.includes(l));
+      safe.classesTaught = (safe.classesTaught || []).filter((c) => allowedLevels.includes(c?.level));
+      safe.classMasterOf = (safe.classMasterOf || []).filter((c) => allowedLevels.includes(c?.level));
+      if (safe.classTeacherOf && !allowedLevels.includes(safe.classTeacherOf.level)) safe.classTeacherOf = null;
+      if (safe.level && !allowedLevels.includes(safe.level)) safe.level = allowedLevels[0] || "";
+    }
+    return safe;
   });
+  res.json({ teachers: scopedTeachers, count: scopedTeachers.length });
 });
 
 // GET /api/teachers/pending - General Admin / Junior School Admin only. The
@@ -146,7 +159,19 @@ router.get("/:id", protect, async (req, res) => {
     .populate("classMasterOf", "name level classGroup")
     .populate("classesTaught", "name level classGroup");
   if (!teacher) return res.status(404).json({ message: "Teacher not found" });
-  res.json({ teacher: teacher.toSafeObject() });
+  const scope = sectionScope(req.user);
+  const teacherLevels = [...new Set([...(teacher.levelsTaught || []), teacher.level].filter(Boolean))];
+  if (scope !== "all" && !teacherLevels.some((l) => levelAllowed(req.user, l))) return res.status(403).json({ message: "This teacher is outside your school section" });
+  const safe = teacher.toSafeObject();
+  if (scope !== "all") {
+    const allowedLevels = scope === "junior" ? ["Nursery", "Primary", "JSS"] : ["SSS"];
+    safe.levelsTaught = (safe.levelsTaught || []).filter((l) => allowedLevels.includes(l));
+    safe.classesTaught = (safe.classesTaught || []).filter((c) => allowedLevels.includes(c?.level));
+    safe.classMasterOf = (safe.classMasterOf || []).filter((c) => allowedLevels.includes(c?.level));
+    if (safe.classTeacherOf && !allowedLevels.includes(safe.classTeacherOf.level)) safe.classTeacherOf = null;
+    if (safe.level && !allowedLevels.includes(safe.level)) safe.level = allowedLevels[0] || "";
+  }
+  res.json({ teacher: safe });
 });
 
 // POST /api/teachers - General Admin / Junior School Admin only. Payload

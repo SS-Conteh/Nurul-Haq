@@ -4,6 +4,7 @@ const Settings = require("../models/Settings");
 const BankTransaction = require("../models/BankTransaction");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { sectionScope } = require("../utils/accessScope");
 const router = express.Router();
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -34,10 +35,10 @@ const populateFields = [
 
 // "EXP-2026-014" — sequential within the academic year, so the numbering
 // restarts cleanly each year the same way the paper book does.
-async function nextVoucherNo(academicYear) {
+async function nextVoucherNo(academicYear, section = "Senior") {
   const yearPart = (academicYear || "").split("/")[1] || new Date().getFullYear();
-  const count = await Expense.countDocuments({ academicYear });
-  return `EXP-${yearPart}-${String(count + 1).padStart(3, "0")}`;
+  const count = await Expense.countDocuments({ academicYear, section });
+  return `EXP-${section === "Junior" ? "J" : "S"}-${yearPart}-${String(count + 1).padStart(3, "0")}`;
 }
 
 // Strips anything a client should never be able to set directly (totals,
@@ -78,6 +79,8 @@ router.get("/", protect, authorize(...VIEW_ROLES), async (req, res) => {
   if (req.query.status) filter.status = req.query.status;
   if (req.query.category) filter.category = req.query.category;
   if (req.query.term) filter.term = req.query.term;
+  const scope = sectionScope(req.user);
+  if (scope !== "all") filter.section = scope === "junior" ? "Junior" : "Senior";
 
   let expenses = await Expense.find(filter).sort("-date -createdAt");
   for (const p of populateFields) expenses = await Expense.populate(expenses, p);
@@ -89,9 +92,10 @@ router.get("/", protect, authorize(...VIEW_ROLES), async (req, res) => {
 // money the school hasn't parted with yet, so it's reported separately.
 router.get("/summary", protect, authorize(...VIEW_ROLES), async (req, res) => {
   const settings = await Settings.findOne();
-  const expenses = await Expense.find(
-    yearFilter(settings?.academicYear, req.query.ay),
-  );
+  const expenseFilter = { ...yearFilter(settings?.academicYear, req.query.ay) };
+  const scope = sectionScope(req.user);
+  if (scope !== "all") expenseFilter.section = scope === "junior" ? "Junior" : "Senior";
+  const expenses = await Expense.find(expenseFilter);
 
   const sumWhere = (fn) =>
     expenses.filter(fn).reduce((s, e) => s + (e.total || 0), 0);
@@ -129,7 +133,8 @@ router.post("/", protect, authorize(...RECORD_ROLES), async (req, res) => {
     const expense = new Expense({
       ...clean,
       academicYear,
-      voucherNo: await nextVoucherNo(academicYear),
+      section: sectionScope(req.user) === "junior" ? "Junior" : "Senior",
+      voucherNo: await nextVoucherNo(academicYear, sectionScope(req.user) === "junior" ? "Junior" : "Senior"),
       status: "Pending",
       recordedBy: req.user._id,
       requestedBy: clean.requestedBy || req.user.name,
@@ -150,6 +155,8 @@ router.put("/:id", protect, authorize(...RECORD_ROLES), async (req, res) => {
   try {
     const existing = await Expense.findById(req.params.id);
     if (!existing) return res.status(404).json({ message: "Voucher not found" });
+    const scope = sectionScope(req.user);
+    if (scope !== "all" && existing.section !== (scope === "junior" ? "Junior" : "Senior")) return res.status(403).json({ message: "This expense is outside your school section" });
     if (existing.status !== "Pending") {
       return res.status(400).json({
         message: `This voucher is already ${existing.status} and can no longer be edited. Raise a correcting voucher instead.`,
@@ -185,6 +192,8 @@ router.patch(
       }
       const expense = await Expense.findById(req.params.id);
       if (!expense) return res.status(404).json({ message: "Voucher not found" });
+      const scope = sectionScope(req.user);
+      if (scope !== "all" && expense.section !== (scope === "junior" ? "Junior" : "Senior")) return res.status(403).json({ message: "This expense is outside your school section" });
 
       if (String(expense.recordedBy) === String(req.user._id)) {
         return res.status(403).json({
@@ -229,6 +238,7 @@ router.patch(
               slipName: expense.receiptName || `${expense.voucherNo}.jpg`,
               recordedBy: req.user._id,
               academicYear: expense.academicYear,
+              section: expense.section || "Senior",
             });
           }
         }
@@ -247,6 +257,8 @@ router.patch(
 router.delete("/:id", protect, authorize("admin"), async (req, res) => {
   const expense = await Expense.findById(req.params.id);
   if (!expense) return res.status(404).json({ message: "Voucher not found" });
+  const scope = sectionScope(req.user);
+  if (scope !== "all" && expense.section !== (scope === "junior" ? "Junior" : "Senior")) return res.status(403).json({ message: "This expense is outside your school section" });
   if (expense.status !== "Pending") {
     return res.status(400).json({
       message: `A ${expense.status} voucher is part of the financial record and cannot be deleted.`,

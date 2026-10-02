@@ -105,6 +105,8 @@ const ExpenseSchema = new mongoose.Schema(
     // totals start clean while every past voucher stays exactly where it
     // is, one dropdown away.
     academicYear: { type: String, default: "", index: true },
+    // Financial section ownership. Junior and Senior expense books are isolated.
+    section: { type: String, enum: ["Junior", "Senior"], default: "Senior", index: true },
     term: { type: String, default: "" },
 
     recordedBy: {
