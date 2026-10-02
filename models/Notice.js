@@ -30,6 +30,9 @@ const NoticeSchema = new mongoose.Schema(
     // on the Notices page. Empty string on notices posted before this
     // field existed.
     term: { type: String, default: "" },
+    // Users who have read this notice. This is separate from clearedBy so
+    // hiding a notice does not make the unread counter ambiguous.
+    readBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     // Users who have cleared/deleted this notice for themselves only —
     // the notice still exists for everyone else and for the principal.
     clearedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],

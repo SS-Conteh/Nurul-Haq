@@ -54,6 +54,7 @@ app.use("/api/classes", require("./routes/classes"));
 app.use("/api/grades", require("./routes/grades"));
 app.use("/api/attendance", require("./routes/attendance"));
 app.use("/api/notices", require("./routes/notices"));
+app.use("/api/notifications", require("./routes/notifications"));
 app.use("/api/events", require("./routes/events"));
 app.use("/api/assignments", require("./routes/assignments"));
 app.use("/api/finance", require("./routes/finance"));

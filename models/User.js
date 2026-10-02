@@ -97,6 +97,25 @@ const UserSchema = new mongoose.Schema(
       default: "Approved",
     },
 
+    // Browser push subscriptions. A user can have multiple devices/browsers
+    // subscribed at the same time. The endpoint is the browser-specific
+    // subscription identifier and the keys are required by Web Push.
+    pushSubscriptions: {
+      type: [
+        {
+          endpoint: { type: String, required: true },
+          expirationTime: { type: Number, default: null },
+          keys: {
+            p256dh: { type: String, required: true },
+            auth: { type: String, required: true },
+          },
+          createdAt: { type: Date, default: Date.now },
+          updatedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+
     // Settings/preferences
     preferences: {
       smsNotifications: { type: Boolean, default: true },

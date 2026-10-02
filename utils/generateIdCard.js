@@ -39,43 +39,24 @@ function dataUrlToBuffer(dataUrl) {
   return null;
 }
 
-// How many years an ID card is valid for, counted from the year it's
-// generated, based on how many years the student has left at their
-// current level:
-//   Nursery — 3 years at Nursery 1, 2 at Nursery 2, 1 at Nursery 3
-//   Primary — 6 years at Class 1, 5 at Class 2, ... 1 at Class 6
-//   JSS     — 3 years at JSS 1, 2 at JSS 2, 1 at JSS 3
-//   SSS     — 3 years at SSS 1, 2 at SSS 2, 1 at SSS 3
-const LEVEL_MAX_YEARS = { Nursery: 3, Primary: 6, JSS: 3, SSS: 3 };
-const LEVEL_GRADE_PATTERN = {
-  Nursery: /Nursery\s*(\d+)/i,
-  Primary: /Class\s*(\d+)/i,
-  JSS: /JSS\s*(\d+)/i,
-  SSS: /SSS\s*(\d+)/i,
-};
+// ID cards are valid for exactly one year from their issue date.
+// The expiry is deliberately independent of level/class so a Class 1,
+// JSS 3, SSS Art, etc. card all receives the same one-year validity.
+function computeExpiryDate(issueDate = new Date()) {
+  const issued = new Date(issueDate);
+  if (Number.isNaN(issued.getTime())) return null;
+  const expiry = new Date(issued);
+  expiry.setFullYear(expiry.getFullYear() + 1);
+  return expiry;
+}
 
-function computeExpiryYear(level, className) {
-  const currentYear = new Date().getFullYear();
-  const maxYears = LEVEL_MAX_YEARS[level] || 3;
-
-  let grade = null;
-  const pattern = LEVEL_GRADE_PATTERN[level];
-  const nameStr = className || "";
-  const specificMatch = pattern && nameStr.match(pattern);
-  if (specificMatch) {
-    grade = parseInt(specificMatch[1], 10);
-  } else {
-    const genericMatch = nameStr.match(/(\d+)/);
-    if (genericMatch) grade = parseInt(genericMatch[1], 10);
-  }
-
-  let yearsRemaining = grade == null ? maxYears : maxYears - grade + 1;
-  if (Number.isNaN(yearsRemaining)) yearsRemaining = maxYears;
-  yearsRemaining = Math.min(Math.max(yearsRemaining, 1), maxYears);
-
-  // The year of issue counts as year 1 of validity (e.g. a Class 1 card
-  // issued in 2026 with 6 years of validity expires in 2031, not 2032).
-  return currentYear + yearsRemaining - 1;
+function formatCardDate(date) {
+  if (!date) return "—";
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto = "" }) {
@@ -237,11 +218,14 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
     /* QR generation failed — card still renders without it */
   }
 
-  const expiryYear = computeExpiryYear(student.classId?.level, student.classId?.name);
+  // A generated card is issued now and expires exactly one calendar year
+  // later, regardless of the student's class/level.
+  const issueDate = new Date();
+  const expiryDate = computeExpiryDate(issueDate);
   doc.font("Helvetica").fontSize(5).fillColor(MUTED);
   doc.text("If found, please return to the school", rx, 116, { width: qrX - rx - 6, lineGap: 1 });
   doc.font("Helvetica-Bold").fontSize(5.6).fillColor("#b91c1c");
-  doc.text(`Expires: ${expiryYear}`, rx, 132, { width: qrX - rx - 6 });
+  doc.text(`Expires: ${formatCardDate(expiryDate)}`, rx, 132, { width: qrX - rx - 6 });
   doc.font("Helvetica").fontSize(4.2).fillColor(MUTED).text("scan to verify", qrX - 2, qrY + qrSize + 1, { width: qrSize + 4, align: "center" });
 
   // outer border
@@ -300,4 +284,4 @@ async function layoutIdCardsOnA4(doc, students, cardOptions) {
   }
 }
 
-module.exports = { drawIdCard, layoutIdCardsOnA4, CARD_W, CARD_H, computeExpiryYear };
+module.exports = { drawIdCard, layoutIdCardsOnA4, CARD_W, CARD_H, computeExpiryDate };
