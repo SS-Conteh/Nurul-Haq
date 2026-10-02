@@ -8,6 +8,7 @@ const Settings = require("../models/Settings");
 const Notice = require("../models/Notice");
 const { protect } = require("../middleware/auth");
 const { yearFilter } = require("../utils/academicYear");
+const { getStudentGradeAccess } = require("../utils/gradeAccess");
 const router = express.Router();
 
 function avg(arr, fn) {
@@ -233,17 +234,20 @@ router.get("/", protect, async (req, res) => {
     // start fresh.
     const settings = await Settings.findOne();
     const yf = yearFilter(settings?.academicYear, req.query.ay);
+    const gradeAccess = await getStudentGradeAccess(req.user._id, req.query.term || "");
     const [grades, attendance] = await Promise.all([
-      Grade.find({ student: req.user._id, ...yf }).lean(),
+      gradeAccess.allowed
+        ? Grade.find({ student: req.user._id, ...yf }).lean()
+        : Promise.resolve([]),
       Attendance.find({ student: req.user._id, ...yf }).select("status").lean(),
     ]);
-    const overallAvg = avg(grades, (g) => g.total);
+    const overallAvg = gradeAccess.allowed ? avg(grades, (g) => g.total) : null;
     const present = attendance.filter((a) => a.status !== "Absent").length;
     const attendanceRate = attendance.length
       ? Math.round((present / attendance.length) * 100)
       : 0;
 
-    return res.json({ role, overallAvg, attendanceRate, grades });
+    return res.json({ role, overallAvg, attendanceRate, grades, gradeAccess });
   }
 
   res.json({ role });

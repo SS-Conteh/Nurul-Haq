@@ -2,6 +2,7 @@ const express = require("express");
 const Grade = require("../models/Grade");
 const User = require("../models/User");
 const Settings = require("../models/Settings");
+const { getStudentGradeAccess } = require("../utils/gradeAccess");
 const { protect, authorize } = require("../middleware/auth");
 const { yearFilter, currentTermString } = require("../utils/academicYear");
 
@@ -20,8 +21,33 @@ router.get("/", protect, async (req, res) => {
   if (req.query.term) filter.term = req.query.term;
   if (req.query.subject) filter.subject = req.query.subject;
 
-  // Students may only see their own grades
-  if (req.user.role === "student") filter.student = req.user._id;
+  // Students may only see their own grades. Fee-based grade access is
+  // enforced BEFORE querying grades so a locked student receives no grade
+  // data at all — not even enough data to calculate an average.
+  if (req.user.role === "student") {
+    const access = await getStudentGradeAccess(req.user._id, req.query.term || "");
+    if (!access.allowed) {
+      return res.status(403).json({
+        message: access.message,
+        code: "GRADE_ACCESS_LOCKED",
+        gradeAccess: access,
+      });
+    }
+    filter.student = req.user._id;
+
+    // A partially-paid student must never receive an all-terms response
+    // containing Term 3 (or any other future/unauthorized term). When no
+    // explicit term was requested, keep the query limited to Terms 1–2.
+    if (access.access === "partial_terms_1_2" && !req.query.term) {
+      const yearPart = String(settings?.academicYear || "").split("/")[1] || "";
+      filter.term = {
+        $in: [
+          `Term 1 · ${yearPart}`,
+          `Term 2 · ${yearPart}`,
+        ],
+      };
+    }
+  }
 
   if (req.query.classId && !req.query.studentId) {
     // Match grades actually recorded while the student was in this class
