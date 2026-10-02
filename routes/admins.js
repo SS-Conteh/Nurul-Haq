@@ -35,7 +35,7 @@ const PRINCIPAL_TITLES = ["Senior Principal", "Junior Principal", "Vice Principa
 router.get(
   "/",
   protect,
-  authorize("admin", "principal"),
+  authorize("admin", "principal", "juniorAdmin"),
   async (req, res) => {
     const filter = { role: { $in: ADMIN_ROLES } };
     if (req.query.role && ADMIN_ROLES.includes(req.query.role)) {
@@ -63,7 +63,7 @@ router.get(
 router.get(
   "/:id",
   protect,
-  authorize("admin", "principal"),
+  authorize("admin", "principal", "juniorAdmin"),
   async (req, res) => {
     const admin = await User.findOne({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
     if (!admin) return res.status(404).json({ message: "Admin not found" });
@@ -77,7 +77,7 @@ router.get(
 // POST /api/admins - General Admin only. Body.role picks which of the
 // admin-layer roles to create; defaults to "admin" (General Admin). When
 // role is "principal", body.principalTitle must be one of PRINCIPAL_TITLES.
-router.post("/", protect, authorize("admin"), async (req, res) => {
+router.post("/", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     const {
       name,
@@ -92,6 +92,9 @@ router.post("/", protect, authorize("admin"), async (req, res) => {
       avatarUrl,
     } = req.body;
     const adminRole = ADMIN_ROLES.includes(role) ? role : "admin";
+    if (req.user.role === "juniorAdmin" && adminRole !== "juniorAdmin") {
+      return res.status(403).json({ message: "Junior Admin can only create Junior Admin accounts." });
+    }
     if (adminRole === "principal" && !PRINCIPAL_TITLES.includes(principalTitle)) {
       return res.status(400).json({
         message: "Pick a title — Senior Principal, Junior Principal, Vice Principal, or Proprietor",
@@ -128,10 +131,13 @@ router.post("/", protect, authorize("admin"), async (req, res) => {
 
 // PUT /api/admins/:id - General Admin only. Nobody else can edit an
 // admin-layer account.
-router.put("/:id", protect, authorize("admin"), async (req, res) => {
+router.put("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     const admin = await User.findOne({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
     if (!admin) return res.status(404).json({ message: "Admin not found" });
+    if (req.user.role === "juniorAdmin" && admin.role !== "juniorAdmin") {
+      return res.status(403).json({ message: "Junior Admin can only edit Junior Admin accounts." });
+    }
     const body = { ...req.body };
     if (!body.password) delete body.password;
     if (!ADMIN_ROLES.includes(body.role)) delete body.role;
@@ -155,7 +161,15 @@ router.put("/:id", protect, authorize("admin"), async (req, res) => {
 
 // DELETE /api/admins/:id - General Admin only. The Principal can view
 // admins but never removes one.
-router.delete("/:id", protect, authorize("admin"), async (req, res) => {
+router.delete("/:id", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
+  const existing = await User.findOne({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
+  if (!existing) return res.status(404).json({ message: "Admin not found" });
+  if (req.user.role === "juniorAdmin" && existing.role !== "juniorAdmin") {
+    return res.status(403).json({ message: "Junior Admin can only remove Junior Admin accounts." });
+  }
+  if (String(existing._id) === String(req.user._id)) {
+    return res.status(400).json({ message: "You cannot remove your own account." });
+  }
   const admin = await User.findOneAndDelete({ _id: req.params.id, role: { $in: ADMIN_ROLES } });
   if (!admin) return res.status(404).json({ message: "Admin not found" });
   res.json({ message: "Admin removed" });

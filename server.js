@@ -68,6 +68,7 @@ app.use("/api/dashboard", require("./routes/dashboard"));
 app.use("/api/reports", require("./routes/reports"));
 app.use("/api/promotions", require("./routes/promotions"));
 app.use("/api/expenses", require("./routes/expenses"));
+app.use("/api/ai", require("./routes/ai"));
 
 app.get("/api/health", (req, res) =>
   res.json({ status: "ok", service: "Nurul-Haq Islamic Academy SMS API" }),

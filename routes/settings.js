@@ -167,7 +167,7 @@ function sameRule(r, level, classGroup, className) {
 
 // PUT /api/settings/class-fee — set (or update) one class's annual fee.
 // General Admin only, same as every other settings write.
-router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
+router.put("/class-fee", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   try {
     const level = String(req.body.level || "").trim();
     const classGroup = String(req.body.classGroup || "").trim();
@@ -176,6 +176,9 @@ router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
 
     if (!LEVELS.includes(level)) {
       return res.status(400).json({ message: "Pick a valid level" });
+    }
+    if (sectionScope(req.user) === "junior" && level === "SSS") {
+      return res.status(403).json({ message: "Junior Admin can only set Nursery, Primary, and JSS fees." });
     }
     if (!className) {
       return res.status(400).json({ message: "Pick a registered class to set the fee for" });
@@ -209,9 +212,12 @@ router.put("/class-fee", protect, authorize("admin"), async (req, res) => {
 });
 
 // DELETE /api/settings/class-fee — clear one class's fee. Nothing else is touched.
-router.delete("/class-fee", protect, authorize("admin"), async (req, res) => {
+router.delete("/class-fee", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
   const { level = "", classGroup = "", className = "" } = req.query;
   let settings = await Settings.findOne();
+  if (sectionScope(req.user) === "junior" && String(level) === "SSS") {
+    return res.status(403).json({ message: "Junior Admin cannot change Senior fees." });
+  }
   if (!settings) return res.json({ classFees: [] });
   settings.classFees = (settings.classFees || []).filter(
     (r) => !sameRule(r, level, classGroup, className),
