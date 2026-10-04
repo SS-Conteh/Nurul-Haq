@@ -88,6 +88,9 @@ const SettingsSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    // ID-card validity is configured separately for Junior and Senior sections.
+    juniorIdCardValidityYears: { type: Number, enum: [1, 2, 3], default: 1 },
+    seniorIdCardValidityYears: { type: Number, enum: [1, 2, 3], default: 1 },
     preferences: {
       smsNotifications: { type: Boolean, default: true },
       autoCalculateGrades: { type: Boolean, default: true },

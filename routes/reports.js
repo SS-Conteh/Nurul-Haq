@@ -263,6 +263,8 @@ router.get(
         student,
         schoolName: settings.schoolName || "Nurul-Haq School",
         motto: settings.motto || "",
+        juniorIdCardValidityYears: settings.juniorIdCardValidityYears || 1,
+        seniorIdCardValidityYears: settings.seniorIdCardValidityYears || 1,
       });
       doc.end();
     } catch (err) {
@@ -326,6 +328,8 @@ router.get(
       await layoutIdCardsOnA4(doc, students, {
         schoolName: settings.schoolName || "Nurul-Haq School",
         motto: settings.motto || "",
+        juniorIdCardValidityYears: settings.juniorIdCardValidityYears || 1,
+        seniorIdCardValidityYears: settings.seniorIdCardValidityYears || 1,
       });
       doc.end();
     } catch (err) {

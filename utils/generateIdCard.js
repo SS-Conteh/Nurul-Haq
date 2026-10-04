@@ -42,11 +42,12 @@ function dataUrlToBuffer(dataUrl) {
 // ID cards are valid for exactly one year from their issue date.
 // The expiry is deliberately independent of level/class so a Class 1,
 // JSS 3, SSS Art, etc. card all receives the same one-year validity.
-function computeExpiryDate(issueDate = new Date()) {
+function computeExpiryDate(issueDate = new Date(), validityYears = 1) {
   const issued = new Date(issueDate);
   if (Number.isNaN(issued.getTime())) return null;
   const expiry = new Date(issued);
-  expiry.setFullYear(expiry.getFullYear() + 1);
+  const years = [1, 2, 3].includes(Number(validityYears)) ? Number(validityYears) : 1;
+  expiry.setFullYear(expiry.getFullYear() + years);
   return expiry;
 }
 
@@ -59,7 +60,7 @@ function formatCardDate(date) {
   });
 }
 
-async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto = "" }) {
+async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto = "", juniorIdCardValidityYears = 1, seniorIdCardValidityYears = 1 }) {
   const W = CARD_W,
     H = CARD_H;
 
@@ -218,10 +219,10 @@ async function drawIdCard(doc, { student, schoolName = "Nurul-Haq School", motto
     /* QR generation failed — card still renders without it */
   }
 
-  // A generated card is issued now and expires exactly one calendar year
-  // later, regardless of the student's class/level.
+  // Expiry is based on the student section setting and the issue date.
   const issueDate = new Date();
-  const expiryDate = computeExpiryDate(issueDate);
+  const validityYears = student.classId?.level === "SSS" ? seniorIdCardValidityYears : juniorIdCardValidityYears;
+  const expiryDate = computeExpiryDate(issueDate, validityYears);
   doc.font("Helvetica").fontSize(5).fillColor(MUTED);
   doc.text("If found, please return to the school", rx, 116, { width: qrX - rx - 6, lineGap: 1 });
   doc.font("Helvetica-Bold").fontSize(5.6).fillColor("#b91c1c");

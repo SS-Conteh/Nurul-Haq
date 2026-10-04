@@ -226,4 +226,23 @@ router.delete("/class-fee", protect, authorize("admin", "juniorAdmin"), async (r
   res.json({ classFees: settings.classFees });
 });
 
+
+// Section-scoped ID-card expiry setting. Junior Admin may change only Junior
+// validity; General/Senior Admin may change the Senior validity (and both).
+router.put("/id-card-expiration", protect, authorize("admin", "juniorAdmin"), async (req, res) => {
+  try {
+    const years = Number(req.body?.years);
+    const section = String(req.body?.section || "").toLowerCase();
+    if (![1, 2, 3].includes(years)) return res.status(400).json({ message: "Choose an expiry duration of 1, 2, or 3 years." });
+    if (!["junior", "senior"].includes(section)) return res.status(400).json({ message: "Choose Junior or Senior section." });
+    if (req.user.role === "juniorAdmin" && section !== "junior") return res.status(403).json({ message: "Junior Admin can only change Junior ID-card expiry." });
+    let settings = await Settings.findOne();
+    if (!settings) settings = new Settings();
+    if (section === "junior") settings.juniorIdCardValidityYears = years;
+    else settings.seniorIdCardValidityYears = years;
+    await settings.save();
+    res.json({ juniorIdCardValidityYears: settings.juniorIdCardValidityYears, seniorIdCardValidityYears: settings.seniorIdCardValidityYears });
+  } catch (err) { res.status(400).json({ message: err.message || "Could not save ID-card expiry." }); }
+});
+
 module.exports = router;
