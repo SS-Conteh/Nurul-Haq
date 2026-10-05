@@ -28,7 +28,7 @@ async function buildSchoolContext(user) {
       ? User.countDocuments({ role: "teacher", $or: [{ levelsTaught: { $in: levels } }, { level: { $in: levels } }] })
       : User.countDocuments({ role: "teacher" }),
     Grade.find(levels ? { classId: { $in: classIds }, academicYear: settings?.academicYear || "" } : { academicYear: settings?.academicYear || "" })
-      .select("subject term total classId")
+      .select("subject term test examScore total classId")
       .lean(),
     Fee.find({ academicYear: settings?.academicYear || "", student: { $in: await User.find(studentFilter).distinct("_id") } })
       .select("amount status term")
@@ -47,7 +47,7 @@ async function buildSchoolContext(user) {
   const expensePaid = expenses.filter((e) => e.status === "Paid").reduce((n, e) => n + Number(e.total || 0), 0);
   const deposits = bank.filter((b) => b.type === "Deposit").reduce((n, b) => n + Number(b.amount || 0), 0);
   const withdrawals = bank.filter((b) => b.type === "Withdrawal").reduce((n, b) => n + Number(b.amount || 0), 0);
-  const avg = grades.length ? Math.round(grades.reduce((n, g) => n + Number(g.total || 0), 0) / grades.length) : null;
+  const avg = grades.length ? Math.round((grades.reduce((n, g) => n + ((Number(g.test) + Number(g.examScore)) / 2), 0) / grades.length + Number.EPSILON) * 10) / 10 : null;
 
   return {
     accessScope: scope,

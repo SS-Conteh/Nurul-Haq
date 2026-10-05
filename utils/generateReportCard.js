@@ -62,16 +62,30 @@ function cellRect(doc, x, y, w, h, text, opts = {}) {
 // (Falls back to treating the value as a real file path, in case any
 // older/seeded record still has one.)
 function resolvePhotoImage(avatarUrl) {
-  if (!avatarUrl) return null;
-  const match = /^data:image\/\w+;base64,(.+)$/.exec(avatarUrl);
-  if (match) {
-    try {
-      return Buffer.from(match[1], "base64");
-    } catch (e) {
-      return null;
+  if (!avatarUrl || typeof avatarUrl !== "string") return null;
+  const value = avatarUrl.trim();
+
+  // Current student photos are stored as data URLs. Do not require the MIME
+  // type to be a simple \"\w+\" because valid types such as image/svg+xml
+  // contain a plus sign and optional parameters can also appear.
+  if (/^data:image\//i.test(value)) {
+    const comma = value.indexOf(",");
+    if (comma > 0) {
+      const meta = value.slice(0, comma);
+      const payload = value.slice(comma + 1);
+      if (/;base64/i.test(meta)) {
+        try {
+          return Buffer.from(payload.replace(/\s/g, ""), "base64");
+        } catch (e) {
+          return null;
+        }
+      }
     }
   }
-  if (fs.existsSync(avatarUrl)) return avatarUrl;
+
+  // Keep compatibility with any older records that stored an actual local
+  // image path instead of a data URL.
+  if (fs.existsSync(value)) return value;
   return null;
 }
 
@@ -175,7 +189,7 @@ async function generateReportCard(res, { student, classDoc, subjects, terms, ter
       t1: termCell(t1, 0),
       t2: termCell(t2, 1),
       t3: termCell(t3, 2),
-      total: subjectHasTerm3 ? total.toFixed(1).replace(/\.0$/, "") : "-",
+      total: subjectHasTerm3 ? total.toFixed(1) : "-",
       mean: subjectHasTerm3 ? mean.toFixed(1) : "-",
       rank: rnkY ? ordinal(rnkY) : "-",
       grade,

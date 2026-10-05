@@ -60,7 +60,7 @@ router.get("/", protect, async (req, res) => {
           $group: {
             _id: "$classId",
             studentCount: { $sum: 1 },
-            totalScore: { $sum: { $sum: "$grades.total" } },
+            totalScore: { $sum: { $sum: { $map: { input: "$grades", as: "g", in: { $divide: [{ $add: ["$$g.test", "$$g.examScore"] }, 2] } } } } },
             gradeCount: { $sum: { $size: "$grades" } },
           },
         },
@@ -72,7 +72,7 @@ router.get("/", protect, async (req, res) => {
     statsByClass[String(s._id)] = {
       studentCount: s.studentCount,
       avgPerformance: s.gradeCount
-        ? Math.round(s.totalScore / s.gradeCount)
+        ? Math.round((s.totalScore / s.gradeCount + Number.EPSILON) * 10) / 10
         : 0,
     };
   });

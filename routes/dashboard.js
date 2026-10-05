@@ -14,8 +14,14 @@ const router = express.Router();
 
 function avg(arr, fn) {
   return arr.length
-    ? Math.round(arr.reduce((s, x) => s + fn(x), 0) / arr.length)
+    ? Math.round((arr.reduce((s, x) => s + Number(fn(x) || 0), 0) / arr.length + Number.EPSILON) * 10) / 10
     : 0;
+}
+function gradeScore(g) {
+  const t = Number(g?.test);
+  const e = Number(g?.examScore);
+  const raw = Number.isFinite(t) && Number.isFinite(e) ? (t + e) / 2 : Number(g?.total || 0);
+  return Math.round((raw + Number.EPSILON) * 10) / 10;
 }
 
 // GET /api/dashboard - returns the right stat bundle for the logged-in user's role
@@ -85,11 +91,11 @@ router.get("/", protect, async (req, res) => {
       scope !== "all"
         ? Grade.aggregate([
             { $match: { ...gradeYearMatch, classId: { $in: scopeClassIds } } },
-            { $group: { _id: null, avg: { $avg: "$total" } } },
+            { $group: { _id: null, avg: { $avg: { $divide: [{ $add: ["$test", "$examScore"] }, 2] } } } },
           ])
         : Grade.aggregate([
             { $match: gradeYearMatch },
-            { $group: { _id: null, avg: { $avg: "$total" } } },
+            { $group: { _id: null, avg: { $avg: { $divide: [{ $add: ["$test", "$examScore"] }, 2] } } } },
           ]),
       // "Today's attendance rate" is inherently a live, current-day figure
       // — it has no meaning for an archived year, so a past year selection
@@ -127,7 +133,7 @@ router.get("/", protect, async (req, res) => {
       })(),
     ]);
 
-    const avgGrade = gradeAgg[0] ? Math.round(gradeAgg[0].avg) : 0;
+    const avgGrade = gradeAgg[0] ? Math.round((gradeAgg[0].avg + Number.EPSILON) * 10) / 10 : 0;
     const presentToday = todaysAttendance.filter(
       (a) => a.status !== "Absent",
     ).length;
@@ -217,10 +223,10 @@ router.get("/", protect, async (req, res) => {
           ...yearFilter(settings?.academicYear, requestedYear),
           ...(req.query.term ? { term: req.query.term } : {}),
         })
-          .select("total")
+          .select("test examScore total")
           .lean()
       : [];
-    const avgScore = avg(subjectGrades, (g) => g.total);
+    const avgScore = avg(subjectGrades, gradeScore);
     // "Pending" grades (students still owed a grade) is a current-year,
     // actionable concept tied to today's class roster — meaningless for a
     // read-only archived year, so it's just 0 there.
@@ -254,7 +260,7 @@ router.get("/", protect, async (req, res) => {
         : Promise.resolve([]),
       Attendance.find({ student: req.user._id, ...yf }).select("status").lean(),
     ]);
-    const overallAvg = gradeAccess.allowed ? avg(grades, (g) => g.total) : null;
+    const overallAvg = gradeAccess.allowed ? avg(grades, gradeScore) : null;
     const present = attendance.filter((a) => a.status !== "Absent").length;
     const attendanceRate = attendance.length
       ? Math.round((present / attendance.length) * 100)

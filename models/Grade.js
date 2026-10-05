@@ -38,7 +38,7 @@ const GradeSchema = new mongoose.Schema(
     // directly. Kept as its own field (rather than computed only on read)
     // because the report card, class averages, and analytics all read it
     // straight off the stored document. Shown on the grades table as "Min". ──
-    total: { type: Number, default: 0 }, // (test + examScore) / 2, rounded, out of 100
+    total: { type: Number, default: 0 }, // (test + examScore) / 2, kept to one decimal, out of 100
 
     grade: { type: String, default: "" },
     position: { type: String, default: "" },
@@ -53,8 +53,9 @@ GradeSchema.index({ subject: 1 });
 GradeSchema.pre("save", function (next) {
   // Test and Exam are both entered as the actual score out of 100. Total
   // (shown on the grades table as "Min") is their plain average — no more
-  // 40/60 weighting. e.g. Test=60, Exam=89 -> Total = (60+89)/2 = 74.5 -> 75
-  this.total = Math.round(((this.test || 0) + (this.examScore || 0)) / 2);
+  // 40/60 weighting. Keep the result to ONE decimal; never round it to a
+  // whole number. e.g. Test=60, Exam=89 -> Total = 74.5.
+  this.total = Math.round((((this.test || 0) + (this.examScore || 0)) / 2) * 10) / 10;
 
   const v = this.total;
   this.grade =

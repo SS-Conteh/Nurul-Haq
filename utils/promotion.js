@@ -126,8 +126,8 @@ async function computePromotions(academicYear) {
     }
 
     const yearlyMean = Math.round(
-      subjectMeans.reduce((s, m) => s + m, 0) / subjectMeans.length,
-    );
+      (subjectMeans.reduce((s, m) => s + m, 0) / subjectMeans.length + Number.EPSILON) * 10
+    ) / 10;
 
     const { next, terminal } = await resolveNextClass(student.classId);
 

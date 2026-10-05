@@ -15,6 +15,13 @@ const { sectionScope, scopedClassIds, levelAllowed, studentInScope } = require("
 
 const router = express.Router();
 
+function gradeScore(g) {
+  const t = Number(g?.test);
+  const e = Number(g?.examScore);
+  const raw = Number.isFinite(t) && Number.isFinite(e) ? (t + e) / 2 : Number(g?.total || 0);
+  return Math.round((raw + Number.EPSILON) * 10) / 10;
+}
+
 // Student IDs are auto-generated as NHIA-001, NHIA-002, … — never typed by
 // hand. The next number is one more than the highest NHIA-### currently in
 // use, so it stays correct even if students were deleted or an older
@@ -59,7 +66,7 @@ async function enrichStudent(studentDoc, scopeClassId) {
 
   const grades = await Grade.find(gradeFilter);
   const avg = grades.length
-    ? Math.round(grades.reduce((s, g) => s + g.total, 0) / grades.length)
+    ? Math.round((grades.reduce((s, g) => s + gradeScore(g), 0) / grades.length + Number.EPSILON) * 10) / 10
     : 0;
 
   const records = await Attendance.find(attFilter);
@@ -100,7 +107,7 @@ async function enrichStudentsBatch(studentDocs, scopeClassId, term) {
       {
         $group: {
           _id: { student: "$student", classId: "$classId" },
-          total: { $sum: "$total" },
+          total: { $sum: { $divide: [{ $add: ["$test", "$examScore"] }, 2] } },
           count: { $sum: 1 },
         },
       },
@@ -122,7 +129,7 @@ async function enrichStudentsBatch(studentDocs, scopeClassId, term) {
   const gradeCell = {};
   gradeStats.forEach((g) => {
     const key = `${g._id.student}_${g._id.classId || ""}`;
-    gradeCell[key] = g.count ? Math.round(g.total / g.count) : 0;
+    gradeCell[key] = g.count ? Math.round((g.total / g.count + Number.EPSILON) * 10) / 10 : 0;
   });
   const attCell = {};
   attStats.forEach((a) => {
@@ -362,7 +369,7 @@ router.get("/:id/history", protect, async (req, res) => {
       {
         $group: {
           _id: { classId: "$classId", academicYear: "$academicYear" },
-          total: { $sum: "$total" },
+          total: { $sum: { $divide: [{ $add: ["$test", "$examScore"] }, 2] } },
           count: { $sum: 1 },
         },
       },
@@ -386,7 +393,7 @@ router.get("/:id/history", protect, async (req, res) => {
   gradeGroups.forEach((g) => {
     const key = `${g._id.classId || ""}_${g._id.academicYear || ""}`;
     cells[key] = cells[key] || { classId: g._id.classId, academicYear: g._id.academicYear };
-    cells[key].avg = g.count ? Math.round(g.total / g.count) : 0;
+    cells[key].avg = g.count ? Math.round((g.total / g.count + Number.EPSILON) * 10) / 10 : 0;
     cells[key].gradeCount = g.count;
   });
   attGroups.forEach((a) => {
