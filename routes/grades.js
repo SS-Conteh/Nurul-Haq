@@ -120,7 +120,7 @@ router.post(
       const section = sectionScope(req.user);
       const scopedStudent = await User.findById(student).select("classId");
       if (!scopedStudent) return res.status(404).json({ message: "Student not found" });
-      if (section !== "all" && !(await studentInScope(req.user, student))) return res.status(403).json({ message: "This student is outside your school section" });
+      if (req.user.role !== "teacher" && section !== "all" && !(await studentInScope(req.user, student))) return res.status(403).json({ message: "This student is outside your school section" });
       let studentDocForAuthorization = null;
       if (req.user.role === "teacher") {
         studentDocForAuthorization = await User.findById(student).select("classId");
