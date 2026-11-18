@@ -482,19 +482,14 @@ function bankSectionQuery(user, requested) {
 
 // ─────────────────────────────────────────────────────────────────────────
 // BANK TRANSACTIONS (deposits/withdrawals)
-// Entering a deposit/withdrawal is General Admin work only — not even the
-// Junior Admin (this is the whole-school bank account, not a level-scoped
-// one) and never the Principal, who can view the ledger for audit purposes
-// but cannot create or edit an entry. There is deliberately no PUT/DELETE
-// here: to prevent tampering with the financial record, a mistake is
-// corrected with a new offsetting entry, never by editing or removing
-// history from the ledger.
+// General Admin and the Bursars can create, edit, and delete transactions.
+// Junior/Senior Bursars are restricted to their own section. Principal and
+// Junior Admin retain view-only access for oversight and audit purposes.
 // ─────────────────────────────────────────────────────────────────────────
 
 // GET /api/finance/transactions - Principal (view), General Admin, Junior
-// School Admin (view), and both Bursars (the bank ledger isn't
-// level-split, so either bursar can see and record the whole school's
-// deposits/withdrawals).
+// School Admin (view), and both Bursars. Each Bursar is restricted to their
+// own section; General Admin can select either ledger.
 // The ledger itself is NEVER year-scoped — every transaction ever
 // recorded, from every academic year, stays visible and in the database
 // permanently (real money moved; nothing about it is ever reset or

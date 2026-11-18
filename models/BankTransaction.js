@@ -1,9 +1,8 @@
 const mongoose = require("mongoose");
 
-// Deposit/withdrawal ledger for the school's bank account — entered by the
-// General Admin only, for proper financial record-keeping/audit purposes.
-// The Principal can view this ledger but never creates or edits entries
-// (same view-only relationship the Principal has with fee payments).
+// Deposit/withdrawal ledger for the school's bank account. General Admin
+// and section-scoped Bursars can maintain entries; oversight roles are
+// view-only. Every entry retains its section and supporting slip.
 const BankTransactionSchema = new mongoose.Schema(
   {
     type: {
