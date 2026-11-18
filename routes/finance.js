@@ -621,4 +621,72 @@ router.post(
   }
 });
 
+
+
+// PUT /api/finance/transactions/:id - edit a transaction within the user's
+// permitted bank section. The original slip is retained unless a replacement
+// is explicitly supplied.
+router.put(
+  "/transactions/:id",
+  protect,
+  authorize("admin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
+    try {
+      const txn = await BankTransaction.findById(req.params.id);
+      if (!txn) return res.status(404).json({ message: "Bank transaction not found" });
+      const allowedSection = bankSectionQuery(req.user, txn.section);
+      if (!allowedSection || allowedSection !== txn.section) {
+        return res.status(403).json({ message: "This transaction is outside your bank section" });
+      }
+      const { type, amount, date, bankName, purpose, slipUrl, slipName } = req.body;
+      if (type !== undefined && !["Deposit", "Withdrawal"].includes(type)) {
+        return res.status(400).json({ message: "Type must be Deposit or Withdrawal" });
+      }
+      if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+        return res.status(400).json({ message: "A valid amount greater than zero is required" });
+      }
+      if (date !== undefined && Number.isNaN(new Date(date).getTime())) {
+        return res.status(400).json({ message: "A valid transaction date is required" });
+      }
+      if (type !== undefined) txn.type = type;
+      if (amount !== undefined) txn.amount = Number(amount);
+      if (date !== undefined) txn.date = new Date(date);
+      if (bankName !== undefined) txn.bankName = String(bankName);
+      if (purpose !== undefined) txn.purpose = String(purpose);
+      if (slipUrl) {
+        txn.slipUrl = slipUrl;
+        txn.slipName = slipName || "";
+      }
+      await txn.save();
+      await txn.populate("recordedBy", "name role");
+      res.json({ transaction: txn });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  },
+);
+
+// DELETE /api/finance/transactions/:id - remove a mistaken transaction.
+// The ledger and balance summaries are computed from stored transactions,
+// so they recalculate automatically on the next fetch.
+router.delete(
+  "/transactions/:id",
+  protect,
+  authorize("admin", "seniorBursar", "juniorBursar"),
+  async (req, res) => {
+    try {
+      const txn = await BankTransaction.findById(req.params.id);
+      if (!txn) return res.status(404).json({ message: "Bank transaction not found" });
+      const allowedSection = bankSectionQuery(req.user, txn.section);
+      if (!allowedSection || allowedSection !== txn.section) {
+        return res.status(403).json({ message: "This transaction is outside your bank section" });
+      }
+      await BankTransaction.deleteOne({ _id: txn._id });
+      res.json({ message: "Bank transaction deleted", deletedId: String(txn._id) });
+    } catch (err) {
+      res.status(400).json({ message: err.message });
+    }
+  },
+);
+
 module.exports = router;
