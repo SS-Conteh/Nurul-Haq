@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Settings = require("../models/Settings");
 const { protect } = require("../middleware/auth");
+const { recordAudit, resolveSection } = require("../utils/auditLogger");
 
 const router = express.Router();
 
@@ -67,6 +68,7 @@ router.post("/login/staff", async (req, res) => {
       { path: "classesTaught", select: "name level classGroup subjects" },
     ]);
     const token = signToken(user._id);
+    await recordAudit({ user, action: "Logged in", module: "Account Access", description: `${user.name} signed in`, section: await resolveSection(user), method: "POST", route: "/api/auth/login/staff", ipAddress: req.ip || "", userAgent: req.headers["user-agent"] || "" });
     res.json({ token, user: user.toSafeObject() });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -108,6 +110,7 @@ router.post("/login/student", async (req, res) => {
     }
     await user.populate({ path: "classId", select: "name" });
     const token = signToken(user._id);
+    await recordAudit({ user, action: "Logged in", module: "Account Access", description: `${user.name} signed in`, section: await resolveSection(user), method: "POST", route: "/api/auth/login/student", ipAddress: req.ip || "", userAgent: req.headers["user-agent"] || "" });
     res.json({ token, user: user.toSafeObject() });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -189,6 +192,17 @@ router.post("/signup/teacher", async (req, res) => {
       approvalStatus: "Pending",
     });
 
+    await recordAudit({
+      user: teacher,
+      action: "Registered",
+      module: "Teachers",
+      description: `Teacher self-registered: ${teacher.name}`,
+      section: await resolveSection(teacher, { body: req.body }),
+      method: "POST",
+      route: "/api/auth/signup/teacher",
+      ipAddress: req.ip || "",
+      userAgent: req.headers["user-agent"] || "",
+    });
     res.status(201).json({
       message:
         "Your account has been created. It's now pending approval from the Principal — you'll be able to sign in once it's approved.",

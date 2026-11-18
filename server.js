@@ -7,6 +7,7 @@ const compression = require("compression");
 const path = require("path");
 const connectDB = require("./config/db");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
+const { auditMiddleware } = require("./utils/auditLogger");
 
 const app = express();
 
@@ -44,8 +45,12 @@ app.use(
 app.use(express.json({ limit: "8mb" }));
 if (process.env.NODE_ENV !== "production") app.use(morgan("dev"));
 
+// ── Central activity capture: records every successful authenticated write ──
+app.use("/api", auditMiddleware);
+
 // ── API routes ──
 app.use("/api/auth", require("./routes/auth"));
+app.use("/api/audit-logs", require("./routes/auditLogs"));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/students", require("./routes/students"));
 app.use("/api/teachers", require("./routes/teachers"));
