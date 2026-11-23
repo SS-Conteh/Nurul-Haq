@@ -107,6 +107,120 @@ router.get("/", protect, async (req, res) => {
   res.json({ grades });
 });
 
+
+// POST /api/grades/bulk — submit one class/subject/term grade sheet.
+// Validate the entire sheet before writing anything so a bad row cannot
+// leave a partially saved class set.
+router.post(
+  "/bulk",
+  protect,
+  authorize("teacher", "juniorAdmin", "admin"),
+  async (req, res) => {
+    try {
+      const { classId, subject, term, entries } = req.body || {};
+      if (!classId || !subject || !term || !Array.isArray(entries) || !entries.length) {
+        return res.status(400).json({ message: "Class, subject, term and at least one student grade are required." });
+      }
+      if (entries.length > 500) {
+        return res.status(400).json({ message: "A grade sheet cannot contain more than 500 students." });
+      }
+
+      const section = sectionScope(req.user);
+      const studentIds = entries.map((row) => String(row.student || ""));
+      if (studentIds.some((id) => !/^[a-f\d]{24}$/i.test(id))) {
+        return res.status(400).json({ message: "One or more rows have an invalid student." });
+      }
+      if (new Set(studentIds).size !== studentIds.length) {
+        return res.status(400).json({ message: "A student appears more than once in this grade sheet." });
+      }
+
+      const students = await User.find({ _id: { $in: studentIds }, role: "student" }).select("_id classId").lean();
+      const byId = new Map(students.map((student) => [String(student._id), student]));
+      if (students.length !== studentIds.length) {
+        return res.status(400).json({ message: "One or more students could not be found." });
+      }
+
+      const allowedClassIds = new Set([
+        ...(req.user.classesTaught || []),
+        ...(req.user.classMasterOf || []),
+        ...(req.user.classTeacherOf ? [req.user.classTeacherOf] : []),
+      ].map(String));
+
+      for (let i = 0; i < entries.length; i++) {
+        const row = entries[i];
+        const student = byId.get(String(row.student));
+        if (!student || String(student.classId || "") !== String(classId)) {
+          return res.status(400).json({ message: `Row ${i + 1}: this student is no longer in the selected class.` });
+        }
+        if (req.user.role === "teacher") {
+          if (!allowedClassIds.has(String(student.classId))) {
+            return res.status(403).json({ message: "You can only submit grades for classes assigned to you." });
+          }
+          const isClassMaster = (req.user.classMasterOf || []).some((id) => String(id) === String(student.classId));
+          if (!isClassMaster && req.user.subjects?.length && !req.user.subjects.includes(subject)) {
+            return res.status(403).json({ message: "You can only submit grades for your own subject(s) unless you are the Class Master of that class." });
+          }
+        } else if (section !== "all" && !(await studentInScope(req.user, row.student))) {
+          return res.status(403).json({ message: `Row ${i + 1}: this student is outside your school section.` });
+        }
+
+        const test = Number(row.test);
+        const examScore = Number(row.examScore);
+        if (!Number.isFinite(test) || test < 0 || test > 100 || !Number.isFinite(examScore) || examScore < 0 || examScore > 100) {
+          return res.status(400).json({ message: `Row ${i + 1}: Test and Exam scores must be between 0 and 100.` });
+        }
+      }
+
+      if (req.user.role === "teacher") {
+        const settingsForTerm = await Settings.findOne();
+        const expectedTerm = expectedCurrentTermString(settingsForTerm);
+        if (!expectedTerm) {
+          return res.status(400).json({ message: "The current term hasn't been set yet — ask an Admin to set it in Settings before grading." });
+        }
+        if (term !== expectedTerm) {
+          return res.status(400).json({ message: `Grades can only be submitted for the current term (${expectedTerm}).` });
+        }
+      }
+
+      const existing = await Grade.find({
+        student: { $in: studentIds },
+        subject,
+        term,
+      }).select("student").lean();
+      if (existing.length) {
+        const alreadyGraded = new Set(existing.map((g) => String(g.student)));
+        const names = entries.filter((row) => alreadyGraded.has(String(row.student))).length;
+        return res.status(409).json({
+          message: `${names} student(s) already have a grade for ${subject} in ${term}. Existing teacher submissions are locked; ask an admin to correct them.`,
+          existingStudentIds: [...alreadyGraded],
+        });
+      }
+
+      const settings = await Settings.findOne();
+      const documents = entries.map((row) => ({
+        student: row.student,
+        classId,
+        subject,
+        term,
+        test: Number(row.test),
+        examScore: Number(row.examScore),
+        total: Math.round(((Number(row.test) + Number(row.examScore)) / 2) * 10) / 10,
+        grade: (() => {
+          const total = Math.round(((Number(row.test) + Number(row.examScore)) / 2) * 10) / 10;
+          return total >= 80 ? "A" : total >= 70 ? "B" : total >= 60 ? "C" : total >= 50 ? "D" : "F";
+        })(),
+        remark: String(row.remark || "").trim(),
+        teacher: req.user._id,
+        academicYear: settings?.academicYear || "",
+      }));
+      const created = await Grade.insertMany(documents, { ordered: true });
+      return res.status(201).json({ message: `${created.length} grades submitted successfully.`, count: created.length });
+    } catch (err) {
+      return res.status(400).json({ message: err.message || "Could not submit the grade sheet." });
+    }
+  },
+);
+
 // POST /api/grades - teacher submits a grade; admin/juniorAdmin can submit
 // or correct one directly. The Principal can view grades but never
 // edits/submits one.
